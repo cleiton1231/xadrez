@@ -1,7 +1,8 @@
 """Classificação de lances de xadrez baseada no modelo de Win Probability do Lichess.
 
 Converte centipawns em probabilidade de vitória e classifica os lances
-a partir da perda de chance de vitória (ΔWin%).
+a partir da perda de chance de vitória (ΔWin%), com normalização unificada
+de perspectiva e tolerância de ponto flutuante.
 """
 
 from __future__ import annotations
@@ -14,6 +15,9 @@ import chess
 
 # Constante de regressão logística utilizada pelo Lichess para conversão de centipawns
 LICHESS_WIN_PROB_CONSTANT: float = 0.00368208
+
+# Tolerância para mitigar imprecisões de ponto flutuante em comparações de fronteira
+EPSILON: float = 1e-4
 
 
 class MoveCategory(StrEnum):
@@ -30,23 +34,23 @@ class MoveCategory(StrEnum):
     def from_delta(cls, delta_win_prob: float) -> MoveCategory:
         """Determina a categoria do lance a partir da perda de probabilidade de vitória.
 
-        Faixas de corte:
-        - ΔW <= 0.0%  -> BEST
-        - 0.0% < ΔW <= 2.0% -> EXCELLENT
-        - 2.0% < ΔW <= 5.0% -> GOOD
-        - 5.0% < ΔW <= 10.0% -> INACCURACY
-        - 10.0% < ΔW <= 20.0% -> MISTAKE
-        - ΔW > 20.0% -> BLUNDER
+        Faixas de corte com tolerância EPSILON:
+        - ΔW <= 0.0 + EPSILON  -> BEST
+        - ΔW <= 2.0 + EPSILON  -> EXCELLENT
+        - ΔW <= 5.0 + EPSILON  -> GOOD
+        - ΔW <= 10.0 + EPSILON -> INACCURACY
+        - ΔW <= 20.0 + EPSILON -> MISTAKE
+        - ΔW > 20.0 + EPSILON  -> BLUNDER
         """
-        if delta_win_prob <= 0.0:
+        if delta_win_prob <= 0.0 + EPSILON:
             return cls.BEST
-        if delta_win_prob <= 2.0:
+        if delta_win_prob <= 2.0 + EPSILON:
             return cls.EXCELLENT
-        if delta_win_prob <= 5.0:
+        if delta_win_prob <= 5.0 + EPSILON:
             return cls.GOOD
-        if delta_win_prob <= 10.0:
+        if delta_win_prob <= 10.0 + EPSILON:
             return cls.INACCURACY
-        if delta_win_prob <= 20.0:
+        if delta_win_prob <= 20.0 + EPSILON:
             return cls.MISTAKE
         return cls.BLUNDER
 
@@ -68,6 +72,21 @@ class MoveClassification:
     win_prob_after: float
     delta_win_prob: float
     player: chess.Color
+
+
+def to_player_perspective(eval_pos: PositionEvaluation, color: chess.Color) -> PositionEvaluation:
+    """Converte a avaliação da ótica absoluta das Brancas para a ótica do jogador ativo.
+
+    - Se o jogador for Brancas, retorna a avaliação inalterada.
+    - Se o jogador for Pretas, inverte os sinais de centipawns e mate com checagem segura de None.
+    """
+    if color == chess.WHITE:
+        return eval_pos
+
+    black_cp = -eval_pos.white_cp if eval_pos.white_cp is not None else None
+    black_mate = -eval_pos.mate_for_white if eval_pos.mate_for_white is not None else None
+
+    return PositionEvaluation(white_cp=black_cp, mate_for_white=black_mate)
 
 
 def win_probability(white_cp: int | None, mate_for_white: int | None) -> float:
@@ -102,27 +121,12 @@ def classify_move(
     eval_after: PositionEvaluation,
     player: chess.Color,
 ) -> MoveClassification:
-    """Classifica um lance com base na perda de chance de vitória (ΔWin%) da perspectiva do jogador.
+    """Classifica um lance com base na perda de Win% (ΔWin%) da perspectiva do jogador."""
+    norm_before = to_player_perspective(eval_before, player)
+    norm_after = to_player_perspective(eval_after, player)
 
-    - Lance das Brancas: usa diretamente a avaliação das Brancas.
-    - Lance das Pretas: inverte os centipawns e sinal de mate para obter a perspectiva das Pretas.
-    """
-    if player == chess.WHITE:
-        prob_before = win_probability(eval_before.white_cp, eval_before.mate_for_white)
-        prob_after = win_probability(eval_after.white_cp, eval_after.mate_for_white)
-    else:
-        # Inversão de perspectiva para as Pretas
-        black_cp_before = -eval_before.white_cp if eval_before.white_cp is not None else None
-        mate_for_black_before = (
-            -eval_before.mate_for_white if eval_before.mate_for_white is not None else None
-        )
-        prob_before = win_probability(black_cp_before, mate_for_black_before)
-
-        black_cp_after = -eval_after.white_cp if eval_after.white_cp is not None else None
-        mate_for_black_after = (
-            -eval_after.mate_for_white if eval_after.mate_for_white is not None else None
-        )
-        prob_after = win_probability(black_cp_after, mate_for_black_after)
+    prob_before = win_probability(norm_before.white_cp, norm_before.mate_for_white)
+    prob_after = win_probability(norm_after.white_cp, norm_after.mate_for_white)
 
     delta_win_prob = prob_before - prob_after
     category = MoveCategory.from_delta(delta_win_prob)

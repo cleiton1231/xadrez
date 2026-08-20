@@ -1,17 +1,22 @@
-"""Testes unitários e de propriedades para a classificação de lances (TDD).
+"""Testes unitários e de propriedades para a classificação de lances (TDD v4).
 
-Valida a conversão logística de centipawns para Win Probability (Lichess),
-as faixas de corte exatas, limites de fronteira com pytest.approx e
-a normalização de perspectiva (Brancas vs Pretas).
+Valida:
+1. Função logística do Lichess para Win Probability.
+2. Função unificada to_player_perspective (com checagem segura de None em cp e mate).
+3. Classificação de lances com tolerância EPSILON = 1e-4 nas fronteiras exatas.
+4. Normalização de perspectiva do jogador ativo (Brancas vs Pretas).
+5. Limitação assumida da Fase 1 para distância de mate (+M1->+M8 e -M8->-M1).
 """
 
 import chess
 import pytest
 
 from chess_analyzer.classify import (
+    EPSILON,
     MoveCategory,
     PositionEvaluation,
     classify_move,
+    to_player_perspective,
     win_probability,
 )
 
@@ -26,21 +31,17 @@ class TestWinProbability:
 
     def test_imbalanced_positive_eval(self) -> None:
         """Valida pontos conhecidos da curva logística para centipawns positivos."""
-        # +800 cp -> 100 / (1 + exp(-0.00368208 * 800)) ~= 95.0053%
         prob_800 = win_probability(white_cp=800, mate_for_white=None)
         assert prob_800 == pytest.approx(95.0053, abs=1e-3)
 
-        # +650 cp -> 100 / (1 + exp(-0.00368208 * 650)) ~= 91.6324%
         prob_650 = win_probability(white_cp=650, mate_for_white=None)
         assert prob_650 == pytest.approx(91.6324, abs=1e-3)
 
     def test_imbalanced_negative_eval(self) -> None:
         """Valida pontos conhecidos da curva logística para centipawns negativos."""
-        # -150 cp -> 100 / (1 + exp(0.00368208 * 150)) ~= 36.5330%
         prob_minus_150 = win_probability(white_cp=-150, mate_for_white=None)
         assert prob_minus_150 == pytest.approx(36.5330, abs=1e-3)
 
-        # -300 cp -> 100 / (1 + exp(0.00368208 * 300)) ~= 24.8874%
         prob_minus_300 = win_probability(white_cp=-300, mate_for_white=None)
         assert prob_minus_300 == pytest.approx(24.8874, abs=1e-3)
 
@@ -58,6 +59,41 @@ class TestWinProbability:
         """Avaliação sem centipawn e sem mate deve levantar ValueError."""
         with pytest.raises(ValueError, match="Pelo menos um"):
             win_probability(white_cp=None, mate_for_white=None)
+
+
+class TestToPlayerPerspective:
+    """Testes da função unificada de normalização de perspectiva."""
+
+    def test_white_perspective_returns_unchanged(self) -> None:
+        """Para as Brancas, os valores de cp e mate permanecem idênticos."""
+        eval_pos = PositionEvaluation(white_cp=150, mate_for_white=None)
+        res = to_player_perspective(eval_pos, color=chess.WHITE)
+        assert res.white_cp == 150
+        assert res.mate_for_white is None
+
+        eval_mate = PositionEvaluation(white_cp=None, mate_for_white=3)
+        res_mate = to_player_perspective(eval_mate, color=chess.WHITE)
+        assert res_mate.white_cp is None
+        assert res_mate.mate_for_white == 3
+
+    def test_black_perspective_inverts_centipawns_safely(self) -> None:
+        """Para as Pretas, inverte centipawns com segurança sem erro de None."""
+        eval_pos = PositionEvaluation(white_cp=200, mate_for_white=None)
+        res = to_player_perspective(eval_pos, color=chess.BLACK)
+        assert res.white_cp == -200
+        assert res.mate_for_white is None
+
+    def test_black_perspective_inverts_mate_safely(self) -> None:
+        """Para as Pretas, inverte mate_for_white (+2 vira -2) sem TypeError em white_cp."""
+        eval_mate_for_white = PositionEvaluation(white_cp=None, mate_for_white=2)
+        res = to_player_perspective(eval_mate_for_white, color=chess.BLACK)
+        assert res.white_cp is None
+        assert res.mate_for_white == -2
+
+        eval_mate_for_black = PositionEvaluation(white_cp=None, mate_for_white=-4)
+        res2 = to_player_perspective(eval_mate_for_black, color=chess.BLACK)
+        assert res2.white_cp is None
+        assert res2.mate_for_white == 4
 
 
 class TestClassifyMove:
@@ -127,41 +163,57 @@ class TestClassifyMove:
         assert res.delta_win_prob == pytest.approx(59.1026, abs=1e-3)
         assert res.category == MoveCategory.BLUNDER
 
-    def test_mate_in_one_to_mate_in_eight_limitation(self) -> None:
-        """Limitação assumida da Fase 1: +M1 -> +M8 continua avaliado como 100% -> 100% (BEST)."""
-        eval_before = PositionEvaluation(white_cp=None, mate_for_white=1)
-        eval_after = PositionEvaluation(white_cp=None, mate_for_white=8)
-        res = classify_move(eval_before, eval_after, player=chess.WHITE)
+    def test_mate_distance_limitation_symmetric(self) -> None:
+        """Limitação assumida da Fase 1 documentada na v4:
 
-        assert res.delta_win_prob == pytest.approx(0.0)
-        assert res.category == MoveCategory.BEST
+        +M1 -> +M8 continua avaliado como 100% -> 100% (BEST).
+        -M8 -> -M1 continua avaliado como 0% -> 0% (BEST pela limitação de distância).
+        """
+        # Caso positivo: prolongar vitória
+        eval_pos_before = PositionEvaluation(white_cp=None, mate_for_white=1)
+        eval_pos_after = PositionEvaluation(white_cp=None, mate_for_white=8)
+        res_pos = classify_move(eval_pos_before, eval_pos_after, player=chess.WHITE)
+        assert res_pos.delta_win_prob == pytest.approx(0.0)
+        assert res_pos.category == MoveCategory.BEST
+
+        # Caso negativo: acelerar derrota
+        eval_neg_before = PositionEvaluation(white_cp=None, mate_for_white=-8)
+        eval_neg_after = PositionEvaluation(white_cp=None, mate_for_white=-1)
+        res_neg = classify_move(eval_neg_before, eval_neg_after, player=chess.WHITE)
+        assert res_neg.delta_win_prob == pytest.approx(0.0)
+        assert res_neg.category == MoveCategory.BEST
 
 
-class TestCategoryBoundaries:
-    """Testes explícitos nas fronteiras exatas de cada faixa de corte de delta Win%."""
+class TestCategoryBoundariesWithEpsilon:
+    """Testes explícitos nas fronteiras exatas com tolerância EPSILON."""
 
     def test_boundary_zero_percent(self) -> None:
-        """Delta <= 0.0 é BEST."""
+        """Delta <= 0.0 + EPSILON é BEST."""
         assert MoveCategory.from_delta(0.0) == MoveCategory.BEST
         assert MoveCategory.from_delta(-0.0001) == MoveCategory.BEST
+        assert MoveCategory.from_delta(0.0 + EPSILON) == MoveCategory.BEST
+        assert MoveCategory.from_delta(0.0 + EPSILON + 1e-6) == MoveCategory.EXCELLENT
 
     def test_boundary_two_percent(self) -> None:
-        """0.0 < Delta <= 2.0 é EXCELLENT; Delta > 2.0 é GOOD."""
-        assert MoveCategory.from_delta(0.0001) == MoveCategory.EXCELLENT
+        """Delta <= 2.0 + EPSILON é EXCELLENT; acima é GOOD."""
         assert MoveCategory.from_delta(2.0) == MoveCategory.EXCELLENT
-        assert MoveCategory.from_delta(2.0001) == MoveCategory.GOOD
+        assert MoveCategory.from_delta(2.0 + EPSILON) == MoveCategory.EXCELLENT
+        assert MoveCategory.from_delta(2.0 + EPSILON + 1e-6) == MoveCategory.GOOD
 
     def test_boundary_five_percent(self) -> None:
-        """2.0 < Delta <= 5.0 é GOOD; Delta > 5.0 é INACCURACY."""
+        """Delta <= 5.0 + EPSILON é GOOD; acima é INACCURACY."""
         assert MoveCategory.from_delta(5.0) == MoveCategory.GOOD
-        assert MoveCategory.from_delta(5.0001) == MoveCategory.INACCURACY
+        assert MoveCategory.from_delta(5.0 + EPSILON) == MoveCategory.GOOD
+        assert MoveCategory.from_delta(5.0 + EPSILON + 1e-6) == MoveCategory.INACCURACY
 
     def test_boundary_ten_percent(self) -> None:
-        """5.0 < Delta <= 10.0 é INACCURACY; Delta > 10.0 é MISTAKE."""
+        """Delta <= 10.0 + EPSILON é INACCURACY; acima é MISTAKE."""
         assert MoveCategory.from_delta(10.0) == MoveCategory.INACCURACY
-        assert MoveCategory.from_delta(10.0001) == MoveCategory.MISTAKE
+        assert MoveCategory.from_delta(10.0 + EPSILON) == MoveCategory.INACCURACY
+        assert MoveCategory.from_delta(10.0 + EPSILON + 1e-6) == MoveCategory.MISTAKE
 
     def test_boundary_twenty_percent(self) -> None:
-        """10.0 < Delta <= 20.0 é MISTAKE; Delta > 20.0 é BLUNDER."""
+        """Delta <= 20.0 + EPSILON é MISTAKE; acima é BLUNDER."""
         assert MoveCategory.from_delta(20.0) == MoveCategory.MISTAKE
-        assert MoveCategory.from_delta(20.0001) == MoveCategory.BLUNDER
+        assert MoveCategory.from_delta(20.0 + EPSILON) == MoveCategory.MISTAKE
+        assert MoveCategory.from_delta(20.0 + EPSILON + 1e-6) == MoveCategory.BLUNDER
