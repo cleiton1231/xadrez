@@ -158,3 +158,18 @@ solução) do dataset do Lichess batendo com o tema mais fraco identificado.
 - Docstrings e README em português.
 - Commits pequenos, conventional commits, mensagem em inglês.
 - `ruff` + `mypy` limpos antes de qualquer commit — não é sugestão.
+
+---
+
+## 10. Notas operacionais sobre o Antigravity
+
+Registros documentais sobre o funcionamento do ambiente Antigravity (descobertos e mapeados durante a sessão) para consulta futura:
+
+- **Injeção de Regras:** `AGENT.md` é carregado como *Rules* e injetado automaticamente em todo prompt processado no diretório do projeto — não precisa ser "aberto" explicitamente para estar em efeito.
+- **Ciclo de Vida das Skills:** Skills seguem um modelo de três estágios:
+  1. *Discovery*: O agente enxerga apenas o nome e a descrição (frontmatter) de cada skill.
+  2. *Activation*: Lê o `SKILL.md` completo caso considere aplicável.
+  3. *Execution*: Segue as instruções internas documentadas.
+  A ativação é *implícita*, baseada puramente na similaridade semântica com a descrição, e **não é garantida**.
+- **Achado Concreto da Sessão:** Uma skill pode ser listada pelo agente como "em uso" e aplicada tomando como base apenas o resumo genérico disponível no próprio `AGENT.md`, sem que o arquivo `SKILL.md` original tenha sido efetivamente lido. Isso ocorreu com as skills `test-driven-development`, `verification-before-attestation` e `systematic-debugging` na Etapa 2 inicial, até que a leitura integral fosse exigida forçosamente via intervenção humana.
+- **Protocolo Adotado a Partir de Agora:** Para skills marcadas como obrigatórias no `AGENT.md` (como TDD, verification-before-attestation, dependency-audit, systematic-debugging), **a leitura integral do arquivo `SKILL.md` correspondente deve ser confirmada explicitamente (via `view_file`) antes de a skill ser declarada como "em uso"**. Apenas declarar no chat que ela está sendo seguida é insuficiente e viola o processo de garantia de qualidade.

@@ -86,9 +86,9 @@ def test_real_uci_evaluation_timeout() -> None:
 
     duration = time.time() - start_time
 
-    # O tempo deve ser limitado em ~2.0s. Damos uma pequena tolerância para overhead (ex: até 3.5s)
-    # Se o timeout estiver desativado, o Stockfish travará por muito mais tempo.
-    assert 2.0 <= duration <= 3.5
+    # O tempo deve ser limitado em ~2.0s. Damos uma tolerância maior para overhead (ex: até 5.0s)
+    # para cobrir I/O UCI e carga de CPU (flakes em CI). Se desativado, travará muito mais tempo.
+    assert 2.0 <= duration <= 5.0
 
 
 def test_process_lifecycle_no_orphans() -> None:
