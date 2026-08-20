@@ -54,8 +54,8 @@ class StockfishEngine:
         if self._engine is None:
             raise RuntimeError("Engine não foi inicializado. Use 'with StockfishEngine(...)'.")
 
-        # Avaliação com engine e normalização para a perspectiva das brancas
-        info = self._engine.analyse(board, chess.engine.Limit(depth=self.depth))
+        # Normalização para a perspectiva das brancas (com timeout seguro de 2.0s)
+        info = self._engine.analyse(board, chess.engine.Limit(depth=self.depth, time=2.0))
         pov_score = info["score"].white()
 
         # Tratamento de segurança para Mate, prevenindo TypeError com valores .score() nulos

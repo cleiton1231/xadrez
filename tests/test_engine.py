@@ -1,4 +1,5 @@
 import subprocess
+import time
 
 import chess
 
@@ -74,20 +75,38 @@ def test_real_uci_evaluation_mate_in_x() -> None:
     assert eval_pos.mate_for_white == 1
 
 
+def test_real_uci_evaluation_timeout() -> None:
+    """Valida se o limite de timeout de segurança (2.0s) de fato interrompe buscas demoradas."""
+    # Posição complexa inicial, pedindo depth muito alta para forçar o acionamento do timeout
+    board = chess.Board()
+    start_time = time.time()
+
+    with StockfishEngine(STOCKFISH_PATH, depth=99) as engine:
+        engine.evaluate(board)
+
+    duration = time.time() - start_time
+
+    # O tempo deve ser limitado em ~2.0s. Damos uma pequena tolerância para overhead (ex: até 3.5s)
+    # Se o timeout estiver desativado, o Stockfish travará por muito mais tempo.
+    assert 2.0 <= duration <= 3.5
+
+
 def test_process_lifecycle_no_orphans() -> None:
     """O gerenciador de contexto DEVE encerrar o processo (quit), mesmo ocorrendo exceção."""
     initial_count = count_stockfish_processes()
 
     # Caso 1: Sucesso
     with StockfishEngine(STOCKFISH_PATH):
-        # Quando engine implementado de verdade, o count sobe aqui
-        pass
+        # Afirma que o processo de fato foi criado dentro do contexto
+        assert count_stockfish_processes() == initial_count + 1
 
     assert count_stockfish_processes() == initial_count
 
     # Caso 2: Exceção no meio do processamento
     try:
         with StockfishEngine(STOCKFISH_PATH):
+            # Afirma que o processo de fato foi criado dentro do contexto antes de quebrar
+            assert count_stockfish_processes() == initial_count + 1
             raise RuntimeError("Simulação de quebra")
     except RuntimeError:
         pass
