@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and SQLite databases (Regra 6 do AGENT.md: nunca commitar dados pessoais)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Testing and Type checking caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE and OS files
+.DS_Store
+.vscode/
+.idea/
