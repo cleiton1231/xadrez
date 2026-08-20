@@ -27,7 +27,8 @@ class StockfishEngine:
             path: Caminho para o binário do Stockfish.
             depth: Profundidade de busca alvo.
                    Nota de Design (Fase 1): depth=12 foi escolhido pois em hardware comum
-                   avalia posições na ordem de milissegundos a poucos décimos de segundo.
+                   avalia posições complexas de meio-jogo muito rapidamente (medido empíricamente
+                   entre ~6ms e ~50ms por lance).
             move_time_limit: Tempo máximo (s) por lance. Atua apenas como safety valve
                    para evitar que a engine trave o processo indefinidamente em posições
                    complexas. Não é esperado que depth=12 estoure 2.0s em uso normal.

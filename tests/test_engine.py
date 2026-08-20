@@ -1,7 +1,9 @@
+import logging
 import subprocess
 import time
 
 import chess
+import pytest
 
 from chess_analyzer.engine import StockfishEngine
 
@@ -81,7 +83,7 @@ def test_real_uci_evaluation_timeout() -> None:
     board = chess.Board()
     start_time = time.time()
 
-    with StockfishEngine(STOCKFISH_PATH, depth=99) as engine:
+    with StockfishEngine(STOCKFISH_PATH, depth=99, move_time_limit=2.0) as engine:
         engine.evaluate(board)
 
     duration = time.time() - start_time
@@ -89,6 +91,37 @@ def test_real_uci_evaluation_timeout() -> None:
     # O tempo deve ser limitado em ~2.0s. Damos uma tolerância maior para overhead (ex: até 5.0s)
     # para cobrir I/O UCI e carga de CPU (flakes em CI). Se desativado, travará muito mais tempo.
     assert 2.0 <= duration <= 5.0
+
+
+def test_logging_truncation_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Deve emitir warning se a avaliação for truncada antes do alvo devido ao time_limit."""
+    board = chess.Board()
+    # Força truncamento com depth extremo e move_time_limit impossível
+    with StockfishEngine(STOCKFISH_PATH, depth=99, move_time_limit=0.001) as engine:
+        with caplog.at_level(logging.WARNING):
+            engine.evaluate(board)
+
+    # Verifica se warning foi emitido
+    warning_found = False
+    for record in caplog.records:
+        if "Avaliação truncada por tempo limite" in record.message:
+            warning_found = True
+            assert "Profundidade atingida:" in record.message
+            assert "(alvo: 99)" in record.message
+    assert warning_found, "O warning de truncamento não foi emitido como esperado."
+
+
+def test_logging_no_truncation_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """NÃO deve emitir warning se a profundidade foi totalmente atingida (operação normal)."""
+    board = chess.Board()
+    # Avaliação trivial (depth 1) com tempo folgado
+    with StockfishEngine(STOCKFISH_PATH, depth=1, move_time_limit=2.0) as engine:
+        with caplog.at_level(logging.WARNING):
+            engine.evaluate(board)
+
+    # Verifica se o warning não foi emitido
+    for record in caplog.records:
+        assert "Avaliação truncada por tempo limite" not in record.message
 
 
 def test_process_lifecycle_no_orphans() -> None:
