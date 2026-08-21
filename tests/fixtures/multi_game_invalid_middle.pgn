@@ -1,0 +1,19 @@
+[Event "Game 1"]
+[White "W1"]
+[Black "B1"]
+[Result "1-0"]
+
+1. e4 e5 1-0
+
+[Event "Game 2"]
+[Black "B2"]
+[Result "0-1"]
+
+1. d4 d5 0-1
+
+[Event "Game 3"]
+[White "W3"]
+[Black "B3"]
+[Result "1/2-1/2"]
+
+1. c4 c5 1/2-1/2

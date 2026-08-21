@@ -1,0 +1,14 @@
+[Event "Rated Blitz game"]
+[Site "https://lichess.org/test"]
+[Date "2023.01.01"]
+[White "Player1"]
+[Black "Player2"]
+[Result "1-0"]
+[WhiteElo "1500"]
+[BlackElo "1400"]
+[TimeControl "300+0"]
+[ECO "C20"]
+[Termination "Normal"]
+[Annotator "Lichess"]
+
+1. e4 e5 2. Bc4 1-0

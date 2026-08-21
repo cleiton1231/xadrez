@@ -1,0 +1,15 @@
+[Event "Live Chess"]
+[Site "Chess.com"]
+[Date "2023.01.02"]
+[White "Player3"]
+[Black "Player4"]
+[Result "0-1"]
+[WhiteElo "1600"]
+[BlackElo "1700"]
+[TimeControl "180+2"]
+[ECO "A00"]
+[EndTime "16:20:00 PST"]
+[Termination "Player4 won by resignation"]
+[Link "https://chess.com/game/live/123"]
+
+1. g3 d5 2. Bg2 0-1
