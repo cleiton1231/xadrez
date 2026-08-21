@@ -1,4 +1,4 @@
-# AGENT.md — Chess Performance Analyzer
+# GEMINI.md — Chess Performance Analyzer
 
 Documento raiz de orquestração para o Antigravity. Define escopo, arquitetura,
 regras de execução e quando cada skill deve ser invocada. Isso não é um
@@ -64,17 +64,21 @@ disfarçada de feature.
 
 ```
 chess-analyzer/
-├── AGENT.md
+├── GEMINI.md
 ├── pyproject.toml
 ├── src/chess_analyzer/
 │   ├── pgn_import.py      # parsing e normalização de PGN
 │   ├── engine.py           # wrapper do Stockfish (UCI)
 │   ├── classify.py         # classificação de lance (core — TDD obrigatório)
+│   ├── db.py               # persistência local em SQLite e cache FEN
 │   ├── stats.py             # agregação estatística
 │   ├── puzzles.py           # Fase 2 — dataset Lichess
 │   └── cli.py
 ├── tests/
 │   ├── test_classify.py
+│   ├── test_engine.py
+│   ├── test_pgn_import.py
+│   ├── test_db.py
 │   ├── test_stats.py
 │   └── fixtures/            # PGNs de teste, posições conhecidas
 ├── data/                     # gitignored — partidas reais do usuário, .db local
@@ -102,6 +106,7 @@ Isso é lógica core → passa por TDD, ver seção 6.
 | Skill | Quando usar neste projeto |
 |---|---|
 | `concise-planning` | Obrigatório antes de qualquer mudança que toque 2+ arquivos ou for multi-etapa (ex: montar o pipeline import→eval→classify→stats inteiro). Não começar a codar direto. |
+| `grounded-planning` | Obrigatório em conjunto com `concise-planning` sempre que o plano tocar schema de dados, lógica core, ou qualquer decisão que se propague para etapas futuras (ex: db.py, classify.py, stats.py). Existe porque planos estruturalmente completos já saíram rasos nesse projeto — preenchidos sem verificar contra código real, com decisões vagas sem mecanismo nomeado, e alegações de performance não medidas. Ver histórico comparativo na Seção 10. |
 | `test-driven-development` | Obrigatório para toda lógica core: `classify.py` e `stats.py`. Red-green-refactor sem pular etapa. GUI/CLI de output não precisa do mesmo rigor. |
 | `dependency-audit` | Obrigatório antes de adicionar qualquer lib nova ao `pyproject.toml`. Projeto roda local com dados pessoais (suas partidas) — não é opcional. |
 | `systematic-debugging` | Obrigatório para qualquer bug. Proibido "tentar corrigir" sem identificar causa raiz primeiro. Isso vale principalmente pra bugs de sincronização com o processo do Stockfish (UCI é assíncrono e propenso a race condition mal tratada). |
@@ -165,11 +170,13 @@ solução) do dataset do Lichess batendo com o tema mais fraco identificado.
 
 Registros documentais sobre o funcionamento do ambiente Antigravity (descobertos e mapeados durante a sessão) para consulta futura:
 
-- **Injeção de Regras:** `AGENT.md` é carregado como *Rules* e injetado automaticamente em todo prompt processado no diretório do projeto — não precisa ser "aberto" explicitamente para estar em efeito.
+- **Injeção de Regras:** `GEMINI.md` é carregado como *Rules* e injetado automaticamente em todo prompt processado no diretório do projeto — não precisa ser "aberto" explicitamente para estar em efeito.
 - **Ciclo de Vida das Skills:** Skills seguem um modelo de três estágios:
   1. *Discovery*: O agente enxerga apenas o nome e a descrição (frontmatter) de cada skill.
   2. *Activation*: Lê o `SKILL.md` completo caso considere aplicável.
   3. *Execution*: Segue as instruções internas documentadas.
   A ativação é *implícita*, baseada puramente na similaridade semântica com a descrição, e **não é garantida**.
-- **Achado Concreto da Sessão:** Uma skill pode ser listada pelo agente como "em uso" e aplicada tomando como base apenas o resumo genérico disponível no próprio `AGENT.md`, sem que o arquivo `SKILL.md` original tenha sido efetivamente lido. Isso ocorreu com as skills `test-driven-development`, `verification-before-attestation` e `systematic-debugging` na Etapa 2 inicial, até que a leitura integral fosse exigida forçosamente via intervenção humana.
-- **Protocolo Adotado a Partir de Agora:** Para skills marcadas como obrigatórias no `AGENT.md` (como TDD, verification-before-attestation, dependency-audit, systematic-debugging), **a leitura integral do arquivo `SKILL.md` correspondente deve ser confirmada explicitamente (via `view_file`) antes de a skill ser declarada como "em uso"**. Apenas declarar no chat que ela está sendo seguida é insuficiente e viola o processo de garantia de qualidade.
+- **Achado Concreto da Sessão:** Uma skill pode ser listada pelo agente como "em uso" e aplicada tomando como base apenas o resumo genérico disponível no próprio `GEMINI.md`, sem que o arquivo `SKILL.md` original tenha sido efetivamente lido. Isso ocorreu com as skills `test-driven-development`, `verification-before-attestation` e `systematic-debugging` na Etapa 2 inicial, até que a leitura integral fosse exigida forçosamente via intervenção humana.
+- **Protocolo Adotado a Partir de Agora:** Para skills marcadas como obrigatórias no `GEMINI.md` (como TDD, verification-before-attestation, dependency-audit, systematic-debugging), **a leitura integral do arquivo `SKILL.md` correspondente deve ser confirmada explicitamente (via `view_file`) antes de a skill ser declarada como "em uso"**. Apenas declarar no chat que ela está sendo seguida é insuficiente e viola o processo de garantia de qualidade.
+- **Skills Globais são herdadas entre produtos:** confirmado em 21/08/2026 — uma skill criada como Global aparece automaticamente disponível em CLI, IDE e Antigravity 2.0, sem necessidade de recriação manual por canal. Não é necessário duplicar configuração por superfície.
+- **Comparação de canais/modelos na Etapa 5 (db.py):** planos gerados por agy CLI (Gemini), extensão ACP/Zed, `agy` via Gemini 3.1 Pro e Grok 4.6 Composer para o mesmo prompt revelaram gaps recorrentes não cobertos por `concise-planning` sozinho: PRAGMA por conexão não reaplicado, chave de cache (FEN) não normalizada, decisões de falha-parcial vagas, e nenhuma verificação real contra o código já commitado — exceto no plano do Grok 4.6, que citou `node.board().fen()` diretamente do `pgn_import.py`. Motivou a criação da skill `grounded-planning`.

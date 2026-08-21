@@ -21,7 +21,7 @@ O projeto segue desenvolvimento orientado a testes (TDD) e rigor metodológico. 
   - `src/chess_analyzer/cli.py`: Interface de linha de comando (CLI via Typer/Rich) para processamento de arquivos e visualização de tabelas/JSON.
 - **Roadmap Futuro (Fases 2 e 3):**
   - Fase 2: Integração com dataset de puzzles do Lichess (`puzzles.py`).
-  - Fase 3: Servidor MCP / Coaching explicativo com LLM (planejado no `AGENT.md`).
+  - Fase 3: Servidor MCP / Coaching explicativo com LLM (planejado no `GEMINI.md`).
 
 ---
 
@@ -66,7 +66,7 @@ $$W(cp) = \frac{100}{1 + e^{-0.00368208 \cdot cp}}$$
 
 ```
 chess-analyzer/
-├── AGENT.md                     # Constituição do agente, regras e orquestração
+├── GEMINI.md                    # Constituição do agente, regras e orquestração
 ├── pyproject.toml               # Configuração do pacote, ferramentas e dependências
 ├── README.md                    # Documentação do projeto
 ├── src/chess_analyzer/
