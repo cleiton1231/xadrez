@@ -13,13 +13,15 @@ O projeto segue desenvolvimento orientado a testes (TDD) e rigor metodológico. 
 - **Implementado e Testado:**
   - `src/chess_analyzer/classify.py`: Classificação precisa de lances baseada na perda de probabilidade de vitória ($\Delta\text{Win\%}$), convertendo centipawns via regressão logística com normalização de perspectiva e tratamento de mate.
   - `src/chess_analyzer/engine.py`: Wrapper UCI para o Stockfish com gerenciamento de ciclo de vida (`with`), bypass automático para posições de fim de jogo e avaliação síncrona com timeout seguro.
-  - Suíte de testes automatizados (`tests/test_classify.py` e `tests/test_engine.py`) cobrindo a lógica existente (29 testes passando).
+  - `src/chess_analyzer/pgn_import.py`: Parsing iterativo (streaming via generator `Iterator[ParsedGame]`) de arquivos PGN com suporte ao Lichess e Chess.com, canonicidade de lances SAN e robustez contra arquivos binários ou malformados.
+  - `src/chess_analyzer/db.py`: Persistência local em SQLite com journal mode WAL, garantia de integridade referencial (`PRAGMA foreign_keys = ON`), deduplicação canônica idempotente por hash SHA-256, FEN normalizado (4 campos essenciais) e cache de avaliações de posições por profundidade (`depth`).
+  - Suíte de testes automatizados (`tests/test_classify.py`, `tests/test_engine.py`, `tests/test_pgn_import.py`, `tests/test_db.py`) cobrindo a lógica core (53 testes passando).
 - **Em Planejamento / Próximos Passos (Fase 1):**
-  - `src/chess_analyzer/pgn_import.py`: Parsing e normalização de partidas PGN (Etapa 4).
   - `src/chess_analyzer/stats.py`: Agregação estatística de erros (por fase, abertura ECO e cor).
   - `src/chess_analyzer/cli.py`: Interface de linha de comando (CLI via Typer/Rich) para processamento de arquivos e visualização de tabelas/JSON.
 - **Roadmap Futuro (Fases 2 e 3):**
-  - Nada implementado ainda (planejado no `AGENT.md`).
+  - Fase 2: Integração com dataset de puzzles do Lichess (`puzzles.py`).
+  - Fase 3: Servidor MCP / Coaching explicativo com LLM (planejado no `AGENT.md`).
 
 ---
 
@@ -28,7 +30,7 @@ O projeto segue desenvolvimento orientado a testes (TDD) e rigor metodológico. 
 - **Linguagem & Tipagem:** Python 3.11+ com type hints estritos (`mypy --strict`).
 - **Lógica de Xadrez & PGN:** `python-chess`.
 - **Engine de Análise:** Stockfish via protocolo UCI (binário local instalado pelo usuário, não vendorizado).
-- **Persistência Local:** SQLite (para cache de avaliações e histórico de partidas).
+- **Persistência Local:** SQLite (para cache de avaliações de posições e histórico de partidas).
 - **Interface CLI:** `typer` e `rich`.
 - **Qualidade & Testes:** `pytest`, `ruff` (linter/formatter) e `mypy` (type checker).
 
@@ -71,7 +73,8 @@ chess-analyzer/
 │   ├── __init__.py              # [Implementado]
 │   ├── classify.py              # [Implementado] Classificação por Win Probability (TDD)
 │   ├── engine.py                # [Implementado] Wrapper do Stockfish via UCI
-│   ├── pgn_import.py            # [Em planejamento] Parsing e normalização de PGN
+│   ├── pgn_import.py            # [Implementado] Parsing iterativo e streaming de PGN
+│   ├── db.py                    # [Implementado] Persistência local SQLite, idempotência e cache FEN
 │   ├── stats.py                 # [Planejado] Agregação de métricas e padrões de erro
 │   ├── puzzles.py               # [Fase 2 - Planejado] Integração com dataset de puzzles Lichess
 │   └── cli.py                   # [Planejado] Interface de linha de comando (Typer)
@@ -79,8 +82,10 @@ chess-analyzer/
 │   ├── __init__.py              # [Implementado]
 │   ├── test_classify.py         # [Implementado] Testes da lógica de conversão e faixas
 │   ├── test_engine.py           # [Implementado] Testes unitários e integração Stockfish
+│   ├── test_pgn_import.py       # [Implementado] Testes de parsing robusto de PGN
+│   ├── test_db.py               # [Implementado] Testes de persistência, constraints e integridade
 │   ├── test_stats.py            # [Planejado] Testes de agregação estatística
-│   └── fixtures/                # [Planejado] PGNs de teste e posições conhecidas
+│   └── fixtures/                # [Implementado] PGNs reais e sintéticos de teste
 └── data/                        # [Gitignored] Armazenamento de SQLite e PGNs locais
 ```
 
@@ -91,13 +96,14 @@ chess-analyzer/
 O desenvolvimento é estritamente sequencial. Fases posteriores só são iniciadas quando as fases anteriores estiverem sólidas, estáveis e testadas.
 
 1. **Fase 1 — MVP (Foco Atual):**
-   - Importação e normalização de PGNs locais.
-   - Avaliação de posições com Stockfish (benchmark medido: ~6–50ms por posição de meio-jogo com `depth=12`).
-   - Classificação de lances por $\Delta\text{Win\%}$.
-   - Agregação estatística por fase da partida, cor e abertura (ECO).
-   - CLI com saídas em tabela e JSON.
+   - Importação e normalização de PGNs locais (`pgn_import.py`).
+   - Persistência e deduplicação local em SQLite com cache FEN (`db.py`).
+   - Avaliação de posições com Stockfish (`engine.py`).
+   - Classificação de lances por $\Delta\text{Win\%}$ (`classify.py`).
+   - Agregação estatística por fase da partida, cor e abertura ECO (`stats.py`).
+   - CLI com saídas em tabela e JSON (`cli.py`).
 2. **Fase 2 — Treino Personalizado:**
-   - Indexação do dataset público de puzzles do Lichess.
+   - Indexação do dataset público de puzzles do Lichess (`puzzles.py`).
    - Cruzamento dos pontos fracos identificados com temas táticos correspondentes.
    - Geração de cadernos de exercícios (FENs + soluções) direcionados.
 3. **Fase 3 — Extensões (Stretch Goals):**
@@ -130,11 +136,12 @@ pip install -e ".[dev]"
 > *Nota: Como a CLI (`cli.py`) ainda não foi implementada, não há comandos de linha de comando para uso final no momento. A execução atual é focada nos testes automatizados e linters.*
 
 ```bash
-# Executar a suíte de testes
+# Executar a suíte de testes completa
 pytest
 
 # Executar linter e formatação
 ruff check .
+ruff format --check .
 
 # Executar verificação estática de tipos
 mypy src tests
