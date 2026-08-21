@@ -70,6 +70,7 @@ chess-analyzer/
 │   ├── pgn_import.py      # parsing e normalização de PGN
 │   ├── engine.py           # wrapper do Stockfish (UCI)
 │   ├── classify.py         # classificação de lance (core — TDD obrigatório)
+│   ├── analyze.py          # orquestrador de análise conectando engine, classify e db
 │   ├── db.py               # persistência local em SQLite e cache FEN
 │   ├── stats.py             # agregação estatística
 │   ├── puzzles.py           # Fase 2 — dataset Lichess
@@ -79,6 +80,7 @@ chess-analyzer/
 │   ├── test_engine.py
 │   ├── test_pgn_import.py
 │   ├── test_db.py
+│   ├── test_analyze.py
 │   ├── test_stats.py
 │   └── fixtures/            # PGNs de teste, posições conhecidas
 ├── data/                     # gitignored — partidas reais do usuário, .db local
@@ -143,8 +145,8 @@ foi confiabilidade do agente, não falta de ferramenta.
 
 ## 8. Definição de pronto (DoD) por fase
 
-**Fase 1:** roda `chess-analyzer import partidas.pgn` e
-`chess-analyzer stats`, retorna números reais de um PGN de teste conhecido,
+**Fase 1:** roda `chess-analyzer import partidas.pgn`, `chess-analyzer analyze` e
+`chess-analyzer stats <jogador>`, retorna números reais de um PGN de teste conhecido,
 com testes unitários cobrindo classificação e agregação passando via
 `pytest`, sem mock do Stockfish nos testes de integração (testes de
 classificação podem mockar eval, mas pelo menos um teste de ponta a ponta
