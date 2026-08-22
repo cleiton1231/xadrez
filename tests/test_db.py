@@ -68,11 +68,11 @@ def test_init_db_creates_tables_and_user_version(db_path: str) -> None:
         cur = conn.cursor()
         cur.execute("PRAGMA user_version;")
         user_version = cur.fetchone()[0]
-        assert user_version == 1
+        assert user_version == 2
 
         cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = {row[0] for row in cur.fetchall()}
-        assert {"games", "moves", "evaluations"}.issubset(tables)
+        assert {"games", "moves", "evaluations", "puzzles", "puzzle_themes"}.issubset(tables)
 
         cur.execute("SELECT name FROM sqlite_master WHERE type='index';")
         indices = {row[0] for row in cur.fetchall()}
