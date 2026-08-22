@@ -27,8 +27,6 @@ htmlcov/
 .vscode/
 .idea/
 
-# Reports gerados por etapa
-docs/reports/
 
 # Teamwork agent artifacts
 .agents/
