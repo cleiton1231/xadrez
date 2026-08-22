@@ -20,10 +20,12 @@ from chess_analyzer.pgn_import import parse_pgn_file
 from chess_analyzer.puzzles import (
     LICHESS_PUZZLE_URL,
     download_puzzle_dataset,
+    generate_training_session,
     index_puzzles,
 )
 from chess_analyzer.stats import (
     AggregatedStats,
+    GamePhase,
     stats_by_color,
     stats_by_game_phase,
     stats_by_opening,
@@ -287,7 +289,166 @@ def stats_cmd(
         _render_stats_table("Estatísticas por Fase do Jogo", "Fase", phase_stats)
 
 
+@app.command("train")
+def train_cmd(
+    player: Annotated[
+        str,
+        typer.Argument(
+            help="Nome do jogador para gerar a sessão de treino direcionada.",
+        ),
+    ],
+    count: Annotated[
+        int,
+        typer.Option(
+            "--count",
+            "-n",
+            help="Quantidade de puzzles a gerar na sessão.",
+        ),
+    ] = 10,
+    phase: Annotated[
+        str | None,
+        typer.Option(
+            "--phase",
+            "-p",
+            help="Força o treino em uma fase específica: 'opening', 'middlegame' ou 'endgame'.",
+        ),
+    ] = None,
+    rating_window: Annotated[
+        int,
+        typer.Option(
+            "--rating-window",
+            "-w",
+            help="Margem de variação de rating em torno do Elo do jogador.",
+        ),
+    ] = 200,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Exporta a sessão de treino em formato JSON.",
+        ),
+    ] = False,
+    db_path: Annotated[
+        str,
+        typer.Option(
+            "--db",
+            "-d",
+            help="Caminho do banco de dados SQLite local.",
+        ),
+    ] = "data/chess_analyzer.db",
+) -> None:
+    """Gera sessão de treino personalizada baseada nas fraquezas do jogador."""
+    forced_phase_enum: GamePhase | None = None
+    if phase:
+        try:
+            forced_phase_enum = GamePhase(phase.upper())
+        except ValueError as err:
+            err_console.print(
+                f"[bold red]Fase inválida '{phase}'. "
+                f"Opções: opening, middlegame, endgame.[/bold red]"
+            )
+            raise typer.Exit(1) from err
+
+    session = generate_training_session(
+        db_path=db_path,
+        player_name=player,
+        count=count,
+        rating_window=rating_window,
+        forced_phase=forced_phase_enum,
+    )
+
+    if session is None:
+        err_console.print(
+            f"[yellow]Não foi possível gerar treino para '{player}'. "
+            f"Verifique se há partidas analisadas ou se há puzzles indexados.[/yellow]"
+        )
+        raise typer.Exit(1)
+
+    if json_output:
+        payload = {
+            "player": session.player_name,
+            "weakest_phase": session.weakest_phase.value,
+            "target_theme": session.target_theme,
+            "diagnosis": {
+                "avg_delta_win_prob": round(session.avg_delta_win_prob, 2),
+                "blunder_count": session.blunder_count,
+                "total_moves_in_phase": session.total_moves_in_phase,
+                "player_elo": session.player_elo,
+                "elo_sample_size": session.elo_sample_size,
+                "requested_count": session.requested_count,
+                "delivered_count": len(session.puzzles),
+            },
+            "puzzles": [asdict(p) for p in session.puzzles],
+        }
+        if len(session.puzzles) < session.requested_count:
+            payload["warning"] = (
+                f"Apenas {len(session.puzzles)} de {session.requested_count} puzzles "
+                f"encontrados na faixa de rating."
+            )
+        print(json.dumps(payload, indent=2))
+        return
+
+    # Renderização no console via Rich Table
+    console.print(
+        f"\n[bold green]🎯 Treino Direcionado para:[/bold green] "
+        f"[bold cyan]{session.player_name}[/bold cyan]"
+    )
+    diag = (
+        f"Fase mais fraca identificada: [bold magenta]{session.weakest_phase.value}[/bold magenta] "
+        f"(Perda média: [bold red]{session.avg_delta_win_prob:.2f}% ΔWin%[/bold red], "
+        f"[red]{session.blunder_count} Blunders[/red] em {session.total_moves_in_phase} lances)"
+    )
+    console.print(diag)
+    if session.player_elo:
+        sample_label = (
+            f"baseado em {session.elo_sample_size} partida"
+            + ("s" if session.elo_sample_size > 1 else "")
+        )
+        elo_str = f"{session.player_elo} ({sample_label})"
+    else:
+        elo_str = "N/A"
+    console.print(
+        f"Elo estimado: [cyan]{elo_str}[/cyan] | "
+        f"Tema dos puzzles: [cyan]{session.target_theme}[/cyan]\n"
+    )
+
+    if not session.puzzles:
+        console.print(
+            "[yellow]Nenhum puzzle encontrado para o tema e faixa "
+            "de rating correspondentes.[/yellow]"
+        )
+        return
+
+    if len(session.puzzles) < session.requested_count:
+        console.print(
+            f"[yellow]Aviso: Apenas {len(session.puzzles)} de {session.requested_count} puzzles "
+            f"encontrados na faixa de rating calibrada.[/yellow]\n"
+        )
+
+
+    table = Table(title=f"Puzzles Selecionados ({len(session.puzzles)} exercícios)")
+    table.add_column("#", justify="right", style="bold")
+    table.add_column("ID", style="cyan")
+    table.add_column("Rating", justify="right", style="green")
+    table.add_column("Lance Oponente", style="yellow")
+    table.add_column("Solução", style="bold green")
+    table.add_column("FEN de Treino")
+
+    for i, p in enumerate(session.puzzles, 1):
+        sol_str = " ".join(p.solution_san)
+        table.add_row(
+            str(i),
+            p.puzzle_id,
+            str(p.rating),
+            p.opponent_move_san,
+            sol_str,
+            p.training_fen,
+        )
+    console.print(table)
+
+
 # ── Grupo de comandos: puzzles ─────────────────────────────────────────────────
+
 
 puzzles_app = typer.Typer(
     name="puzzles",
