@@ -12,7 +12,6 @@ import pytest
 
 from chess_analyzer.db import get_connection, init_db
 from chess_analyzer.puzzles import (
-    IndexStats,
     get_puzzles_by_theme,
     index_puzzles,
     iter_puzzles,
