@@ -262,7 +262,59 @@ def test_generate_training_session_defensive_malformed_fen(tmp_path: Path) -> No
     assert len(session.puzzles) == 0
 
 
+def test_generate_training_session_skips_single_move_puzzle(tmp_path: Path) -> None:
+    """Puzzles com apenas 1 lance (sem sequência de solução) devem ser ignorados."""
+    db_file = str(tmp_path / "single_move.db")
+    init_db(db_file)
+    conn = get_connection(db_file)
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO games (game_hash, white, black, result, white_elo)
+                VALUES ('h_sm', 'Hero', 'Villain', '1-0', 1500);
+                """
+            )
+            f_start = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+            cur.execute(
+                """
+                INSERT INTO moves (game_id, ply, san, fen_after, category, delta_win_prob)
+                VALUES (1, 1, 'e4', :fen, 'BLUNDER', 20.0);
+                """,
+                {"fen": f_start},
+            )
+            # Puzzle com apenas 1 lance (moves = "e2e4", sem lances de solução para o jogador)
+            cur.execute(
+                """
+                INSERT INTO puzzles (
+                    puzzle_id, fen, moves, rating, rating_deviation, popularity, nb_plays, themes
+                )
+                VALUES (
+                    'single_1',
+                    'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+                    'e2e4',
+                    1500, 80, 90, 100, 'opening'
+                );
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO puzzle_themes (puzzle_id, theme)
+                VALUES ('single_1', 'opening');
+                """
+            )
+    finally:
+        conn.close()
+
+    session = generate_training_session(db_file, "Hero", count=5)
+    assert session is not None
+    # Deve ter pulado o puzzle sem lances de solução
+    assert len(session.puzzles) == 0
+
+
 # ── Test 9: Comando CLI 'chess-analyzer train' (Tabela e JSON) ────────────────
+
 
 
 def test_cli_train_command_table_and_json(db_path: str) -> None:

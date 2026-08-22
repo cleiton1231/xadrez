@@ -466,7 +466,7 @@ def generate_training_session(
     for p in raw_puzzles:
         fen_before = p["fen"]
         moves_list = p["moves"].split()
-        if not moves_list:
+        if len(moves_list) < 2:
             continue
 
         try:
