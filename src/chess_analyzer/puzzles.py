@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import chess
 import zstandard
 
 from chess_analyzer.db import (
@@ -23,6 +24,7 @@ from chess_analyzer.db import (
     init_db,
     save_puzzle_index_meta,
 )
+from chess_analyzer.stats import AggregatedStats, GamePhase
 
 LICHESS_PUZZLE_URL: str = "https://database.lichess.org/lichess_db_puzzle.csv.zst"
 
@@ -34,6 +36,39 @@ class IndexStats:
     total: int
     inserted: int
     skipped: bool  # True se abortado por SHA-256 idêntico (sem re-indexação)
+
+
+@dataclass(frozen=True)
+class PuzzleItem:
+    """Item individual de uma sessão de treino."""
+
+    puzzle_id: str
+    fen_before: str           # FEN original (antes do lance do oponente)
+    opponent_move_uci: str    # Lance do oponente (moves[0])
+    opponent_move_san: str    # Lance do oponente em SAN
+    training_fen: str         # FEN da posição de treino apresentada ao jogador
+    solution_uci: list[str]   # Sequência da solução em lances UCI (moves[1:])
+    solution_san: list[str]   # Sequência da solução em SAN legível
+    rating: int               # Rating do puzzle
+    popularity: int           # Popularidade no Lichess
+    themes: list[str]         # Temas associados
+    game_url: str | None      # URL de origem no Lichess
+
+
+@dataclass(frozen=True)
+class TrainingSession:
+    """Sessão de treino completa direcionada para as fraquezas do jogador."""
+
+    player_name: str
+    weakest_phase: GamePhase
+    target_theme: str         # 'opening', 'middlegame' ou 'endgame'
+    avg_delta_win_prob: float
+    blunder_count: int
+    total_moves_in_phase: int
+    player_elo: int | None
+    elo_sample_size: int
+    requested_count: int
+    puzzles: list[PuzzleItem]
 
 
 def compute_file_sha256(path: Path) -> str:
@@ -293,3 +328,194 @@ def _clear_puzzle_tables(db_path: str) -> None:
             conn.execute("DELETE FROM puzzle_index_meta;")
     finally:
         conn.close()
+
+
+def detect_weakest_phase(
+    phase_stats: list[AggregatedStats],
+) -> tuple[GamePhase, AggregatedStats] | None:
+    """Determina a fase mais fraca do jogador a partir das estatísticas agregadas.
+
+    Critério:
+    1. Maior perda média de probabilidade de vitória (avg_delta_win_prob).
+    2. Desempate por maior taxa de blunder (blunders / total_moves).
+    Retorna None se a lista de estatísticas estiver vazia.
+    """
+    if not phase_stats:
+        return None
+
+    def phase_weakness_key(s: AggregatedStats) -> tuple[float, float]:
+        blunder_rate = (
+            s.category_counts.blunder / s.total_moves if s.total_moves > 0 else 0.0
+        )
+        return (s.avg_delta_win_prob, blunder_rate)
+
+    weakest = max(phase_stats, key=phase_weakness_key)
+    return GamePhase(weakest.group_key), weakest
+
+
+def get_player_elo(db_path: str, player_name: str) -> tuple[int, int] | None:
+    """Calcula o Elo médio e o tamanho da amostra (partidas) do jogador em games."""
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                AVG(
+                    CASE
+                        WHEN white = :player AND white_elo > 0
+                        THEN white_elo
+                        WHEN black = :player AND black_elo > 0
+                        THEN black_elo
+                        ELSE NULL
+                    END
+                ),
+                COUNT(
+                    CASE
+                        WHEN white = :player AND white_elo > 0 THEN 1
+                        WHEN black = :player AND black_elo > 0 THEN 1
+                        ELSE NULL
+                    END
+                )
+            FROM games
+            WHERE (white = :player AND white_elo > 0)
+               OR (black = :player AND black_elo > 0);
+            """,
+            {"player": player_name},
+        )
+        row = cur.fetchone()
+        if row and row[0] is not None and row[1] > 0:
+            return round(row[0]), int(row[1])
+        return None
+    finally:
+        conn.close()
+
+
+def generate_training_session(
+    db_path: str,
+    player_name: str,
+    count: int = 10,
+    rating_window: int = 200,
+    forced_phase: GamePhase | None = None,
+) -> TrainingSession | None:
+    """Gera uma sessão de treino personalizada baseada nas fraquezas do jogador.
+
+    Passos:
+    1. Obtém estatísticas de fase via stats_by_game_phase.
+    2. Identifica a pior fase (ou usa forced_phase se especificado).
+    3. Consulta Elo médio do jogador e tamanho da amostra.
+    4. Busca puzzles com o tema da fase no rating calibrado [elo - w, elo + w].
+       Se encontrar menos que `count`, relaxa a janela de rating automaticamente.
+    5. Converte posições de forma defensiva: valida FEN e lances com try/except,
+       aplica Moves[0] ao FEN para obter training_fen e gera soluções em SAN.
+    """
+    from chess_analyzer.stats import stats_by_game_phase
+
+    phase_stats = stats_by_game_phase(db_path, player_name)
+    if not phase_stats and forced_phase is None:
+        return None
+
+    if forced_phase is not None:
+        target_phase = forced_phase
+        matching = [s for s in phase_stats if s.group_key == forced_phase.value]
+        stat_item = matching[0] if matching else None
+        avg_loss = stat_item.avg_delta_win_prob if stat_item else 0.0
+        blunders = stat_item.category_counts.blunder if stat_item else 0
+        total_moves = stat_item.total_moves if stat_item else 0
+    else:
+        detected = detect_weakest_phase(phase_stats)
+        if detected is None:
+            return None
+        target_phase, stat_item = detected
+        avg_loss = stat_item.avg_delta_win_prob
+        blunders = stat_item.category_counts.blunder
+        total_moves = stat_item.total_moves
+
+    theme_name = target_phase.value.lower()  # 'opening', 'middlegame', 'endgame'
+    elo_info = get_player_elo(db_path, player_name)
+    player_elo = elo_info[0] if elo_info else None
+    elo_sample_size = elo_info[1] if elo_info else 0
+
+    if player_elo is not None:
+        min_r = max(0, player_elo - rating_window)
+        max_r = player_elo + rating_window
+    else:
+        min_r = 0
+        max_r = 3000
+
+    raw_puzzles = get_puzzles_by_theme(
+        db_path=db_path,
+        theme=theme_name,
+        limit=count,
+        min_rating=min_r,
+        max_rating=max_r,
+    )
+
+    # Fallback se a janela restrita não retornar quantidade suficiente
+    if len(raw_puzzles) < count and player_elo is not None:
+        raw_puzzles = get_puzzles_by_theme(
+            db_path=db_path,
+            theme=theme_name,
+            limit=count,
+            min_rating=max(0, player_elo - rating_window * 2),
+            max_rating=player_elo + rating_window * 2,
+        )
+
+    puzzle_items: list[PuzzleItem] = []
+    for p in raw_puzzles:
+        fen_before = p["fen"]
+        moves_list = p["moves"].split()
+        if not moves_list:
+            continue
+
+        try:
+            board = chess.Board(fen_before)
+            opp_move_uci = moves_list[0]
+            opp_move = chess.Move.from_uci(opp_move_uci)
+            opp_san = board.san(opp_move)
+            board.push(opp_move)
+            training_fen = board.fen()
+        except ValueError:
+            continue
+
+        solution_uci = moves_list[1:]
+        solution_san: list[str] = []
+        sol_board = board.copy()
+        for m_uci in solution_uci:
+            try:
+                m = chess.Move.from_uci(m_uci)
+                solution_san.append(sol_board.san(m))
+                sol_board.push(m)
+            except ValueError:
+                solution_san.append(m_uci)
+
+        puzzle_items.append(
+            PuzzleItem(
+                puzzle_id=p["puzzle_id"],
+                fen_before=fen_before,
+                opponent_move_uci=opp_move_uci,
+                opponent_move_san=opp_san,
+                training_fen=training_fen,
+                solution_uci=solution_uci,
+                solution_san=solution_san,
+                rating=p["rating"],
+                popularity=p.get("popularity", 0),
+                themes=p["themes"].split() if isinstance(p["themes"], str) else p["themes"],
+                game_url=p.get("game_url"),
+            )
+        )
+
+    return TrainingSession(
+        player_name=player_name,
+        weakest_phase=target_phase,
+        target_theme=theme_name,
+        avg_delta_win_prob=avg_loss,
+        blunder_count=blunders,
+        total_moves_in_phase=total_moves,
+        player_elo=player_elo,
+        elo_sample_size=elo_sample_size,
+        requested_count=count,
+        puzzles=puzzle_items,
+    )
+
