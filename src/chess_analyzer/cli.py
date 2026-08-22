@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from enum import StrEnum
 from pathlib import Path
@@ -30,6 +31,10 @@ from chess_analyzer.stats import (
     stats_by_game_phase,
     stats_by_opening,
 )
+
+_DEFAULT_DB_PATH: str = os.environ.get("CHESS_ANALYZER_DB", "data/chess_analyzer.db")
+
+
 
 
 class StatsDimension(StrEnum):
@@ -99,7 +104,7 @@ def import_cmd(
             "-d",
             help="Caminho do banco de dados SQLite local.",
         ),
-    ] = "data/chess_analyzer.db",
+    ] = _DEFAULT_DB_PATH,
 ) -> None:
     """Importa partidas de um arquivo PGN para o banco SQLite local."""
     try:
@@ -129,7 +134,7 @@ def analyze_cmd(
             "-d",
             help="Caminho do banco de dados SQLite local.",
         ),
-    ] = "data/chess_analyzer.db",
+    ] = _DEFAULT_DB_PATH,
     engine_path: Annotated[
         str,
         typer.Option(
@@ -183,7 +188,7 @@ def stats_cmd(
             "-d",
             help="Caminho do banco de dados SQLite local.",
         ),
-    ] = "data/chess_analyzer.db",
+    ] = _DEFAULT_DB_PATH,
     json_output: Annotated[
         bool,
         typer.Option(
@@ -335,7 +340,7 @@ def train_cmd(
             "-d",
             help="Caminho do banco de dados SQLite local.",
         ),
-    ] = "data/chess_analyzer.db",
+    ] = _DEFAULT_DB_PATH,
 ) -> None:
     """Gera sessão de treino personalizada baseada nas fraquezas do jogador."""
     forced_phase_enum: GamePhase | None = None
@@ -475,7 +480,7 @@ def puzzles_index_cmd(
     db_path: Annotated[
         str,
         typer.Option("--db", "-d", help="Caminho do banco de dados SQLite local."),
-    ] = "data/chess_analyzer.db",
+    ] = _DEFAULT_DB_PATH,
     batch_size: Annotated[
         int,
         typer.Option("--batch-size", help="Tamanho do lote transacional de inserção."),
@@ -536,7 +541,7 @@ def puzzles_status_cmd(
     db_path: Annotated[
         str,
         typer.Option("--db", "-d", help="Caminho do banco de dados SQLite local."),
-    ] = "data/chess_analyzer.db",
+    ] = _DEFAULT_DB_PATH,
 ) -> None:
     """Exibe metadados da indexação de puzzles atual."""
     init_db(db_path)
