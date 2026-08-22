@@ -17,6 +17,11 @@ from chess_analyzer.analyze import analyze_games
 from chess_analyzer.db import get_connection, init_db, save_games
 from chess_analyzer.engine import StockfishEngine
 from chess_analyzer.pgn_import import parse_pgn_file
+from chess_analyzer.puzzles import (
+    LICHESS_PUZZLE_URL,
+    download_puzzle_dataset,
+    index_puzzles,
+)
 from chess_analyzer.stats import (
     AggregatedStats,
     stats_by_color,
@@ -280,3 +285,121 @@ def stats_cmd(
         _render_stats_table("Estatísticas por Abertura (ECO)", "ECO", opening_stats)
     if phase_stats:
         _render_stats_table("Estatísticas por Fase do Jogo", "Fase", phase_stats)
+
+
+# ── Grupo de comandos: puzzles ─────────────────────────────────────────────────
+
+puzzles_app = typer.Typer(
+    name="puzzles",
+    help="Gerencia o dataset local de puzzles do Lichess.",
+    no_args_is_help=True,
+)
+app.add_typer(puzzles_app, name="puzzles")
+
+
+@puzzles_app.command("index")
+def puzzles_index_cmd(
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            "-f",
+            help="Caminho para o arquivo lichess_db_puzzle.csv.zst local.",
+        ),
+    ] = None,
+    download: Annotated[
+        bool,
+        typer.Option("--download", help="Baixa o dataset antes de indexar."),
+    ] = False,
+    db_path: Annotated[
+        str,
+        typer.Option("--db", "-d", help="Caminho do banco de dados SQLite local."),
+    ] = "data/chess_analyzer.db",
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", help="Tamanho do lote transacional de inserção."),
+    ] = 5000,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-indexa mesmo que SHA-256 seja idêntico."),
+    ] = False,
+) -> None:
+    """Indexa o dataset de puzzles do Lichess no banco SQLite local."""
+    if download:
+        console.print(f"Baixando dataset de {LICHESS_PUZZLE_URL} ...")
+        try:
+            zst_path = download_puzzle_dataset(dest_dir="data")
+        except (OSError, RuntimeError) as e:
+            err_console.print(f"[bold red]Erro no download:[/bold red] {e}")
+            raise typer.Exit(1) from e
+        console.print(f"[green]Download concluído:[/green] {zst_path}")
+    elif file is not None:
+        zst_path = file
+    else:
+        err_console.print(
+            "[bold red]Informe --file <caminho> ou use --download.[/bold red]"
+        )
+        raise typer.Exit(1)
+
+    if not zst_path.exists():
+        err_console.print(f"[bold red]Arquivo não encontrado:[/bold red] {zst_path}")
+        raise typer.Exit(1)
+
+    console.print(f"Indexando puzzles de [cyan]{zst_path}[/cyan] ...")
+    try:
+        stats = index_puzzles(
+            zst_path=zst_path,
+            db_path=db_path,
+            batch_size=batch_size,
+            force=force,
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]Erro na indexação:[/bold red] {e}")
+        raise typer.Exit(1) from e
+
+    if stats.skipped:
+        console.print(
+            "[yellow]Dataset já indexado com este arquivo (SHA-256 idêntico).[/yellow]\n"
+            "Use --force para re-indexar."
+        )
+        return
+
+    console.print(
+        f"[bold green]Indexação concluída![/bold green] "
+        f"Puzzles inseridos: {stats.inserted:,}"
+    )
+
+
+@puzzles_app.command("status")
+def puzzles_status_cmd(
+    db_path: Annotated[
+        str,
+        typer.Option("--db", "-d", help="Caminho do banco de dados SQLite local."),
+    ] = "data/chess_analyzer.db",
+) -> None:
+    """Exibe metadados da indexação de puzzles atual."""
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT key, value FROM puzzle_index_meta ORDER BY key;")
+        rows = cur.fetchall()
+        cur.execute("SELECT COUNT(*) FROM puzzles;")
+        count_row = cur.fetchone()
+    except Exception:
+        console.print("[yellow]Nenhum dataset indexado ainda.[/yellow]")
+        return
+    finally:
+        conn.close()
+
+    if not rows:
+        console.print("[yellow]Nenhum dataset indexado ainda.[/yellow]")
+        return
+
+    table = Table(title="Status do Dataset de Puzzles")
+    table.add_column("Chave", style="cyan")
+    table.add_column("Valor")
+    for key, value in rows:
+        table.add_row(key, value)
+    table.add_row("puzzles_in_db", str(count_row[0]) if count_row else "0")
+    console.print(table)
