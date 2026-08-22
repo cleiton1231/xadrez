@@ -39,8 +39,49 @@ def calculate_game_hash(game: ParsedGame) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
+_PUZZLE_SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS puzzles (
+    puzzle_id        TEXT PRIMARY KEY,
+    fen              TEXT NOT NULL,
+    moves            TEXT NOT NULL,
+    rating           INTEGER NOT NULL,
+    rating_deviation INTEGER NOT NULL,
+    popularity       INTEGER NOT NULL,
+    nb_plays         INTEGER NOT NULL,
+    themes           TEXT NOT NULL,
+    game_url         TEXT,
+    opening_tags     TEXT,
+    daily_date       INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS puzzle_themes (
+    puzzle_id TEXT NOT NULL REFERENCES puzzles(puzzle_id) ON DELETE CASCADE,
+    theme     TEXT NOT NULL,
+    PRIMARY KEY (puzzle_id, theme)
+);
+
+CREATE INDEX IF NOT EXISTS idx_puzzle_themes_theme ON puzzle_themes(theme);
+
+CREATE TABLE IF NOT EXISTS puzzle_index_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+
+def _apply_puzzle_schema(conn: sqlite3.Connection) -> None:
+    """Aplica o schema v2 de puzzles numa conexão já aberta."""
+    conn.executescript(_PUZZLE_SCHEMA_V2)
+
+
 def init_db(db_path: str) -> None:
-    """Inicializa o schema do banco de dados SQLite caso ainda não exista."""
+    """Inicializa o schema do banco de dados SQLite caso ainda não exista.
+
+    Versionamento via PRAGMA user_version:
+    - 0 → cria schema v1 (games/moves/evaluations) + v2 (puzzles), seta user_version=2
+    - 1 → aplica delta v2 (tabelas de puzzles) num banco da Fase 1, seta user_version=2
+    - ≥2 → noop
+    """
     dir_name = os.path.dirname(db_path)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
@@ -105,8 +146,15 @@ def init_db(db_path: str) -> None:
 
             PRAGMA user_version = 1;
             """)
+            _apply_puzzle_schema(conn)
+            conn.execute("PRAGMA user_version = 2;")
+        elif version == 1:
+            _apply_puzzle_schema(conn)
+            conn.execute("PRAGMA user_version = 2;")
+        # version >= 2: noop
     finally:
         conn.close()
+
 
 
 def save_games(
@@ -252,3 +300,51 @@ def get_evaluation(
         return (row[0], row[1], row[2])
     finally:
         conn.close()
+
+
+def get_puzzle_index_sha256(db_path: str) -> str | None:
+    """Retorna o SHA-256 registrado da última indexação de puzzles, ou None se nunca indexado."""
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT value FROM puzzle_index_meta WHERE key = 'file_sha256';"
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def save_puzzle_index_meta(
+    db_path: str,
+    source_url: str,
+    file_sha256: str,
+    puzzle_count: int,
+) -> None:
+    """Persiste metadados da indexação de puzzles (idempotente via UPSERT)."""
+    import datetime
+
+    init_db(db_path)
+    conn = get_connection(db_path)
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    rows = [
+        ("source_url", source_url),
+        ("file_sha256", file_sha256),
+        ("puzzle_count", str(puzzle_count)),
+        ("indexed_at", now),
+    ]
+    try:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO puzzle_index_meta (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """,
+                rows,
+            )
+    finally:
+        conn.close()
+
