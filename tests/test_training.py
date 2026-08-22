@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -13,7 +12,6 @@ from chess_analyzer.cli import app
 from chess_analyzer.db import get_connection, init_db
 from chess_analyzer.puzzles import (
     PuzzleItem,
-    TrainingSession,
     detect_weakest_phase,
     generate_training_session,
     get_player_elo,
@@ -39,32 +37,34 @@ def db_path(tmp_path: Path) -> str:
     # Insere partidas de exemplo para o jogador 'PlayerA'
     conn = get_connection(db_file)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO games (game_hash, white, black, result, white_elo, black_elo)
-            VALUES ('hash1', 'PlayerA', 'PlayerB', '1-0', 1600, 1550),
-                   ('hash2', 'PlayerC', 'PlayerA', '0-1', 1650, 1620);
-            """
-        )
-        game1_id = 1
-        game2_id = 2
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO games (game_hash, white, black, result, white_elo, black_elo)
+                VALUES ('hash1', 'PlayerA', 'PlayerB', '1-0', 1600, 1550),
+                       ('hash2', 'PlayerC', 'PlayerA', '0-1', 1650, 1620);
+                """
+            )
+            game1_id = 1
+            game2_id = 2
 
-        # Lances para game 1 (PlayerA = White -> ply ímpares)
-        # OPENING (ply 1..4): 0.5% delta win prob, sem blunder
-        # MIDDLEGAME (ply 21..24): 15.0% delta win prob, com blunder
-        # ENDGAME: sem lances
-        cur.execute(
-            """
-            INSERT INTO moves (game_id, ply, san, fen_after, category, delta_win_prob)
-            VALUES
-                (:g1, 1, 'e4', 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1', 'GOOD', 0.5),
-                (:g1, 21, 'Nf3', 'r1bq1rk1/ppp2ppp/2n2n2/3pp3/1bB1P3/2NP1N2/PPP2PPP/R1BQK2R w KQ - 4 7', 'BLUNDER', 15.0),
-                (:g2, 2, 'e5', 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2', 'EXCELLENT', 0.2),
-                (:g2, 22, 'd5', 'r1bq1rk1/ppp2ppp/2n2n2/3pp3/1bB1P3/2NP1N2/PPP2PPP/R1BQK2R b KQ - 4 7', 'MISTAKE', 8.0);
-            """,
-            {"g1": game1_id, "g2": game2_id},
-        )
+            f1 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+            f2 = "r1bq1rk1/ppp2ppp/2n2n2/3pp3/1bB1P3/2NP1N2/PPP2PPP/R1BQK2R w KQ - 4 7"
+            f3 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+            f4 = "r1bq1rk1/ppp2ppp/2n2n2/3pp3/1bB1P3/2NP1N2/PPP2PPP/R1BQK2R b KQ - 4 7"
+
+            cur.execute(
+                """
+                INSERT INTO moves (game_id, ply, san, fen_after, category, delta_win_prob)
+                VALUES
+                    (:g1, 1, 'e4', :f1, 'GOOD', 0.5),
+                    (:g1, 21, 'Nf3', :f2, 'BLUNDER', 15.0),
+                    (:g2, 2, 'e5', :f3, 'EXCELLENT', 0.2),
+                    (:g2, 22, 'd5', :f4, 'MISTAKE', 8.0);
+                """,
+                {"g1": game1_id, "g2": game2_id, "f1": f1, "f2": f2, "f3": f3, "f4": f4},
+            )
     finally:
         conn.close()
 
@@ -137,7 +137,7 @@ def test_detect_weakest_phase_tiebreaker_blunder_rate() -> None:
 
 def test_get_player_elo_from_games(db_path: str) -> None:
     """get_player_elo deve retornar média arredondada e contagem de partidas."""
-    # PlayerA jogou 1 partida como White (elo 1600) e 1 como Black (elo 1620) -> média 1610, 2 partidas
+    # PlayerA: 1 jogo como White (1600) e 1 como Black (1620) -> média 1610, 2 jogos
     elo_info = get_player_elo(db_path, "PlayerA")
     assert elo_info is not None
     elo, sample_size = elo_info
@@ -220,32 +220,39 @@ def test_generate_training_session_defensive_malformed_fen(tmp_path: Path) -> No
     init_db(db_file)
     conn = get_connection(db_file)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO games (game_hash, white, black, result, white_elo)
-            VALUES ('h1', 'Hero', 'Villain', '1-0', 1500);
-            """
-        )
-        cur.execute(
-            """
-            INSERT INTO moves (game_id, ply, san, fen_after, category, delta_win_prob)
-            VALUES (1, 1, 'e4', 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1', 'BLUNDER', 20.0);
-            """
-        )
-        # Puzzle com FEN corrompido
-        cur.execute(
-            """
-            INSERT INTO puzzles (puzzle_id, fen, moves, rating, rating_deviation, popularity, nb_plays, themes)
-            VALUES ('bad_fen_1', 'INVALID_FEN_STRING_123', 'e2e4 e7e5', 1500, 80, 90, 100, 'opening');
-            """
-        )
-        cur.execute(
-            """
-            INSERT INTO puzzle_themes (puzzle_id, theme)
-            VALUES ('bad_fen_1', 'opening');
-            """
-        )
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO games (game_hash, white, black, result, white_elo)
+                VALUES ('h1', 'Hero', 'Villain', '1-0', 1500);
+                """
+            )
+            f_start = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+            cur.execute(
+                """
+                INSERT INTO moves (game_id, ply, san, fen_after, category, delta_win_prob)
+                VALUES (1, 1, 'e4', :fen, 'BLUNDER', 20.0);
+                """,
+                {"fen": f_start},
+            )
+            # Puzzle com FEN corrompido
+            cur.execute(
+                """
+                INSERT INTO puzzles (
+                    puzzle_id, fen, moves, rating, rating_deviation, popularity, nb_plays, themes
+                )
+                VALUES (
+                    'bad_fen_1', 'INVALID_FEN_STRING_123', 'e2e4 e7e5', 1500, 80, 90, 100, 'opening'
+                );
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO puzzle_themes (puzzle_id, theme)
+                VALUES ('bad_fen_1', 'opening');
+                """
+            )
     finally:
         conn.close()
 
