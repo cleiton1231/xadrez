@@ -5,7 +5,13 @@ from dataclasses import dataclass
 import chess
 
 from chess_analyzer.classify import PositionEvaluation, classify_move
-from chess_analyzer.db import get_connection, get_evaluation, init_db, save_evaluation
+from chess_analyzer.db import (
+    get_connection,
+    get_evaluation,
+    get_game_starting_fen,
+    init_db,
+    save_evaluation,
+)
 from chess_analyzer.engine import StockfishEngine
 
 
@@ -27,12 +33,16 @@ def _get_or_evaluate_fen(
     """Recupera a avaliação de uma posição do cache ou avalia via engine persistindo o resultado.
 
     Nota de Design (Fase 1):
-    Persiste a avaliação com depth=target_depth. Conforme documentado em engine.py (linhas 29-35),
-    depth=12 conclui rotineiramente em ~6ms a ~50ms e move_time_limit (2.0s) atua como safety valve.
-    Em caso de timeout raro, o engine emite warning em log e a avaliação é gravada sob target_depth;
-    decisão aceita para a Fase 1 mantendo a estabilidade dos contratos de PositionEvaluation.
+    Persiste a avaliação com depth=target_depth e engine.cache_key. Conforme documentado
+    em engine.py, depth=12 conclui rotineiramente em ~6ms a ~50ms e move_time_limit (2.0s)
+    atua como safety valve.
     """
-    cached = get_evaluation(db_path, fen, min_depth=target_depth)
+    cached = get_evaluation(
+        db_path,
+        fen,
+        min_depth=target_depth,
+        engine_key=engine.cache_key,
+    )
     if cached is not None:
         return PositionEvaluation(white_cp=cached[0], mate_for_white=cached[1])
 
@@ -43,6 +53,7 @@ def _get_or_evaluate_fen(
         depth=target_depth,
         eval_cp=pos_eval.white_cp,
         eval_mate=pos_eval.mate_for_white,
+        engine_key=engine.cache_key,
     )
     return pos_eval
 
@@ -100,10 +111,12 @@ def analyze_games(
         if not moves:
             continue
 
-        # Avaliação da posição inicial do tabuleiro (para compor o eval_before do ply 1)
+        starting_fen = get_game_starting_fen(db_path, game_id)
+
+        # Avaliação da posição inicial da partida (para compor o eval_before do ply 1)
         eval_before = _get_or_evaluate_fen(
             db_path=db_path,
-            fen=chess.STARTING_FEN,
+            fen=starting_fen,
             engine=engine,
             target_depth=target_depth,
         )

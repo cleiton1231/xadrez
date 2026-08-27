@@ -2,7 +2,10 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+import chess
 import chess.pgn
+
+STANDARD_START_FEN = chess.STARTING_FEN
 
 
 @dataclass
@@ -28,6 +31,7 @@ class ParsedGame:
     time_control: str | None = None
     eco: str | None = None
     variant: str | None = None
+    starting_fen: str = STANDARD_START_FEN
 
 
 def parse_pgn_file(file_path: str) -> Iterator[ParsedGame]:
@@ -69,8 +73,9 @@ def parse_pgn_file(file_path: str) -> Iterator[ParsedGame]:
                 )
                 raise ValueError(msg) from e
             except Exception as e:
-                logging.debug(f"Erro inesperado ao ler PGN no jogo {game_index + 1}: {e}")
-                game = None
+                msg = f"Erro inesperado ao ler PGN no jogo {game_index + 1}: {e}"
+                logging.error(msg)
+                raise ValueError(msg) from e
 
             if game is None:
                 break
@@ -138,6 +143,13 @@ def parse_pgn_file(file_path: str) -> Iterator[ParsedGame]:
                     logging.warning(w)
                 warnings_buffer.clear()
 
+            setup = headers.get("SetUp", "0")
+            fen_header = headers.get("FEN")
+            if setup == "1" and fen_header:
+                starting_fen = fen_header
+            else:
+                starting_fen = STANDARD_START_FEN
+
             yield ParsedGame(
                 white=white,
                 black=black,
@@ -150,7 +162,8 @@ def parse_pgn_file(file_path: str) -> Iterator[ParsedGame]:
                 black_elo=int(black_elo_str) if black_elo_str and black_elo_str.isdigit() else None,
                 time_control=headers.get("TimeControl"),
                 eco=headers.get("ECO"),
-                variant=headers.get("Variant")
+                variant=headers.get("Variant"),
+                starting_fen=starting_fen,
             )
 
         if valid_games_count == 0:
