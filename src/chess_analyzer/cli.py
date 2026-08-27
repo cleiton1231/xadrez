@@ -56,6 +56,15 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def _validate_positive_int(name: str, value: int, minimum: int = 1) -> None:
+    """Valida parâmetros inteiros positivos da CLI."""
+    if value < minimum:
+        err_console.print(
+            f"[bold red]{name} deve ser >= {minimum}, recebido: {value}[/bold red]"
+        )
+        raise typer.Exit(1)
+
+
 def _render_stats_table(title: str, key_header: str, stats_list: list[AggregatedStats]) -> None:
     """Renderiza uma tabela formatada no console com estatísticas agregadas."""
     table = Table(title=title)
@@ -205,93 +214,98 @@ def stats_cmd(
     ] = StatsDimension.ALL,
 ) -> None:
     """Exibe estatísticas agregadas por cor, abertura e fase do jogo."""
-    init_db(db_path)
-
-    # Verificação de lances pendentes para o jogador
-    conn = get_connection(db_path)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT COUNT(*)
-            FROM moves m
-            JOIN games g ON g.id = m.game_id
-            WHERE m.category IS NULL
-              AND (
-                  (g.white = :player AND m.ply % 2 != 0)
-               OR (g.black = :player AND m.ply % 2 = 0)
-              );
-            """,
-            {"player": player},
+        init_db(db_path)
+
+        conn = get_connection(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM moves m
+                JOIN games g ON g.id = m.game_id
+                WHERE m.category IS NULL
+                  AND (
+                      (g.white = :player AND m.ply % 2 != 0)
+                   OR (g.black = :player AND m.ply % 2 = 0)
+                  );
+                """,
+                {"player": player},
+            )
+            pending_count = cur.fetchone()[0]
+        finally:
+            conn.close()
+
+        if pending_count > 0:
+            err_console.print(
+                f"[yellow]Aviso: Existem {pending_count} lances pendentes de análise para o "
+                f"jogador '{player}'. Execute 'chess-analyzer analyze' para análise completa."
+                f"[/yellow]"
+            )
+
+        color_stats = (
+            stats_by_color(db_path, player)
+            if by in (StatsDimension.ALL, StatsDimension.COLOR)
+            else []
         )
-        pending_count = cur.fetchone()[0]
-    finally:
-        conn.close()
-
-    if pending_count > 0:
-        err_console.print(
-            f"[yellow]Aviso: Existem {pending_count} lances pendentes de análise para o "
-            f"jogador '{player}'. Execute 'chess-analyzer analyze' para análise completa.[/yellow]"
+        opening_stats = (
+            stats_by_opening(db_path, player)
+            if by in (StatsDimension.ALL, StatsDimension.OPENING)
+            else []
+        )
+        phase_stats = (
+            stats_by_game_phase(db_path, player)
+            if by in (StatsDimension.ALL, StatsDimension.PHASE)
+            else []
         )
 
-    color_stats = (
-        stats_by_color(db_path, player)
-        if by in (StatsDimension.ALL, StatsDimension.COLOR)
-        else []
-    )
-    opening_stats = (
-        stats_by_opening(db_path, player)
-        if by in (StatsDimension.ALL, StatsDimension.OPENING)
-        else []
-    )
-    phase_stats = (
-        stats_by_game_phase(db_path, player)
-        if by in (StatsDimension.ALL, StatsDimension.PHASE)
-        else []
-    )
+        all_empty = not color_stats and not opening_stats and not phase_stats
 
-    all_empty = not color_stats and not opening_stats and not phase_stats
+        if json_output:
+            total_moves = 0
+            if color_stats:
+                total_moves = sum(s.total_moves for s in color_stats)
+            elif opening_stats:
+                total_moves = sum(s.total_moves for s in opening_stats)
+            elif phase_stats:
+                total_moves = sum(s.total_moves for s in phase_stats)
 
-    if json_output:
-        total_moves = 0
+            payload: dict[str, Any] = {
+                "player": player,
+                "total_analyzed_moves": total_moves,
+            }
+            if by in (StatsDimension.ALL, StatsDimension.COLOR):
+                payload["color"] = [asdict(s) for s in color_stats]
+            if by in (StatsDimension.ALL, StatsDimension.OPENING):
+                payload["opening"] = [asdict(s) for s in opening_stats]
+            if by in (StatsDimension.ALL, StatsDimension.PHASE):
+                payload["game_phase"] = [asdict(s) for s in phase_stats]
+
+            print(json.dumps(payload, indent=2))
+            return
+
+        if all_empty:
+            msg = (
+                f"[bold yellow]Nenhuma partida analisada encontrada para o "
+                f"jogador '{player}'.[/bold yellow]"
+            )
+            console.print(msg)
+            console.print(
+                "Importe partidas com 'chess-analyzer import' e execute "
+                "'chess-analyzer analyze'."
+            )
+            return
+
         if color_stats:
-            total_moves = sum(s.total_moves for s in color_stats)
-        elif opening_stats:
-            total_moves = sum(s.total_moves for s in opening_stats)
-        elif phase_stats:
-            total_moves = sum(s.total_moves for s in phase_stats)
-
-        payload: dict[str, Any] = {
-            "player": player,
-            "total_analyzed_moves": total_moves,
-        }
-        if by in (StatsDimension.ALL, StatsDimension.COLOR):
-            payload["color"] = [asdict(s) for s in color_stats]
-        if by in (StatsDimension.ALL, StatsDimension.OPENING):
-            payload["opening"] = [asdict(s) for s in opening_stats]
-        if by in (StatsDimension.ALL, StatsDimension.PHASE):
-            payload["game_phase"] = [asdict(s) for s in phase_stats]
-
-        print(json.dumps(payload, indent=2))
-        return
-
-    if all_empty:
-        msg = (
-            f"[bold yellow]Nenhuma partida analisada encontrada para o "
-            f"jogador '{player}'.[/bold yellow]"
-        )
-        console.print(msg)
-        console.print(
-            "Importe partidas com 'chess-analyzer import' e execute 'chess-analyzer analyze'."
-        )
-        return
-
-    if color_stats:
-        _render_stats_table("Estatísticas por Cor", "Cor", color_stats)
-    if opening_stats:
-        _render_stats_table("Estatísticas por Abertura (ECO)", "ECO", opening_stats)
-    if phase_stats:
-        _render_stats_table("Estatísticas por Fase do Jogo", "Fase", phase_stats)
+            _render_stats_table("Estatísticas por Cor", "Cor", color_stats)
+        if opening_stats:
+            _render_stats_table("Estatísticas por Abertura (ECO)", "ECO", opening_stats)
+        if phase_stats:
+            _render_stats_table("Estatísticas por Fase do Jogo", "Fase", phase_stats)
+    except Exception as e:
+        err_console.print(f"[bold red]Erro ao calcular estatísticas:[/bold red] {e}")
+        raise typer.Exit(1) from e
 
 
 @app.command("train")
@@ -343,6 +357,9 @@ def train_cmd(
     ] = _DEFAULT_DB_PATH,
 ) -> None:
     """Gera sessão de treino personalizada baseada nas fraquezas do jogador."""
+    _validate_positive_int("count", count)
+    _validate_positive_int("rating-window", rating_window)
+
     forced_phase_enum: GamePhase | None = None
     if phase:
         try:
@@ -491,6 +508,8 @@ def puzzles_index_cmd(
     ] = False,
 ) -> None:
     """Indexa o dataset de puzzles do Lichess no banco SQLite local."""
+    _validate_positive_int("batch-size", batch_size)
+
     if download:
         console.print(f"Baixando dataset de {LICHESS_PUZZLE_URL} ...")
         try:

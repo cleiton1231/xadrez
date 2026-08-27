@@ -4,18 +4,14 @@ Ferramenta local que analisa o histórico de partidas de xadrez (PGN) com Stockf
 
 ---
 
-## 1. Status Geral do Projeto (Projeto Pausado)
+## 1. Status Geral do Projeto
 
 > [!NOTE]
-> **Status:** **Fase 1 (MVP) e Fase 2 (Treino Direcionado) 100% CONCLUÍDAS, TESTADAS E AUDITADAS.**
-> 
-> O projeto encontra-se **pausado por decisão consciente do autor** — não por falta de tempo ou bugs bloqueantes. Todas as metas estabelecidas na constituição do projeto ([`GEMINI.md`](file:///home/cleiton/projetos.pessoais/GEMINI.md)) foram plenamente atingidas e auditadas formalmente por equipes multi-agente (`/teamwork-preview`):
-> - **Auditoria da Fase 1:** [`docs/reports/auditoria_fase1_teamwork.md`](file:///home/cleiton/projetos.pessoais/docs/reports/auditoria_fase1_teamwork.md)
-> - **Auditoria da Fase 2:** [`docs/reports/auditoria_fase2_teamwork.md`](file:///home/cleiton/projetos.pessoais/docs/reports/auditoria_fase2_teamwork.md)
+> **Status:** **Fase 1 (MVP) e Fase 2 (Treino Direcionado) concluídas.** O projeto foi retomado em 2026-08 para estabilização do núcleo (integridade de dados, robustez SQLite/download, CI).
 >
-> **Decisões sobre extensões futuras:**
-> - **Fase 2.5 (Detecção de temas táticos no histórico do jogador via Stockfish):** Avaliada e descartada/adiada. A categorização por fase do jogo (Opening, Middlegame, Endgame) combinada com calibração de rating resolveu o objetivo prático de treino direcionado sem o overhead de processamento contínuo de árvores de variantes.
-> - **Fase 3 (Servidor MCP, Coaching com LLM local e Dashboard Web):** Avaliada e adiada. A interface CLI rápida via Typer e persistência SQLite resolvem integralmente o escopo local de análise agregada.
+> Relatórios históricos de auditoria: [`docs/reports/auditoria_fase1_teamwork.md`](docs/reports/auditoria_fase1_teamwork.md) e [`docs/reports/auditoria_fase2_teamwork.md`](docs/reports/auditoria_fase2_teamwork.md).
+>
+> **Próxima direção de produto:** ver [`docs/ROADMAP.md`](docs/ROADMAP.md) — prioridade recomendada: uso real → MCP → temas táticos.
 
 ---
 
@@ -283,13 +279,15 @@ $$W(cp) = \frac{100}{1 + e^{-0.00368208 \cdot cp}}$$
 Para contextualizar quem for utilizar ou retomar o projeto:
 
 1. **Exports do Chess.com e a tag `[ECO]`:**  
-   Arquivos PGN exportados do Chess.com frequentemente omitem a tag `[ECO]`. Nesses casos, a agregação por abertura (`--by opening`) exibirá as partidas sob códigos vazios ou genéricos. O Lichess normalmente preenche o ECO code.
-2. **Cálculo de Elo e Tamanho de Amostra:**  
+   Arquivos PGN exportados do Chess.com frequentemente omitem a tag `[ECO]`. Nesses casos, a agregação por abertura (`--by opening`) **exclui** partidas sem ECO da agregação (não aparecem como grupo vazio).
+2. **PGNs com FEN inicial customizado (`[SetUp "1"]`):**  
+   Suportados desde a retomada v0.1.x — a FEN inicial é persistida e usada na análise.
+3. **Cálculo de Elo e Tamanho de Amostra:**  
    O Elo do jogador é estimado pela média aritmética de `white_elo`/`black_elo` das partidas analisadas. Com poucas partidas registradas (amostra pequena indicada no diagnóstico), a calibração de rating do treino tático tem confiabilidade estatística reduzida.
-3. **Pico de Memória na Indexação de 6.1M Puzzles:**  
-   Durante a indexação do dataset completo do Lichess, o consumo de RAM atinge ~696MB (acima da estimativa teórica de 500MB). A causa raiz não foi investigada via profiling (candidatos: manutenção da B-Tree do SQLite para 18M+ linhas em `puzzle_themes` ou alocação de objetos por linha no `csv.DictReader`). O processo é executado uma única vez na instalação.
 4. **Concorrência SQLite e `PRAGMA busy_timeout`:**  
-   O gerenciador de conexões em `src/chess_analyzer/db.py` ativa `WAL`, `foreign_keys=ON` e `synchronous=NORMAL`, mas não define `busy_timeout`. Em uso monousuário isso não gera impacto, mas execuções simultâneas em paralelo podem disparar `sqlite3.OperationalError: database is locked`.
+   O gerenciador de conexões em `src/chess_analyzer/db.py` ativa `WAL`, `foreign_keys=ON`, `synchronous=NORMAL` e `busy_timeout=5000ms`.
+5. **Cache de avaliações por engine:**  
+   O cache SQLite diferencia avaliações por `(fen, depth, engine_key)`, onde `engine_key` deriva do caminho do binário Stockfish e profundidade configurada.
 
 ---
 
@@ -306,11 +304,8 @@ Para retomar o desenvolvimento ou rodar o projeto do zero:
 3. **Executar a Suíte de Verificação Integral:**
    Confirme que as dependências do ambiente continuam íntegras:
    ```bash
-   pytest tests/ -v          # 97 testes devem passar
+   pytest tests/ -v          # ~105 testes (integração Stockfish opcional se binário ausente)
    ruff check src/ tests/    # 0 erros de lint
    mypy src/chess_analyzer/  # 0 erros de tipagem
    ```
-4. **Pontos de Decisão em Aberto para Futuras Etapas:**
-   - **Gap de ECO em PGNs do Chess.com:** Criar módulo de inferência de código ECO mapeando os lances iniciais da partida contra uma árvore de aberturas quando a tag `[ECO]` estiver ausente.
-   - **Fase 2.5 (Temas Táticos Específicos):** Implementar classificador de motivos táticos (garfos, cravadas, ataques descobertos) no `classify.py`.
-   - **Fase 3 (Servidor MCP):** Expor as funções `analyze_games`, `stats_by_*` e `generate_training_session` como ferramentas no formato Model Context Protocol via `FastMCP`.
+4. **Consultar roadmap:** [`docs/ROADMAP.md`](docs/ROADMAP.md) para direção de produto pós-estabilização.

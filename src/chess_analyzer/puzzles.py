@@ -9,6 +9,7 @@ import csv
 import hashlib
 import io
 import shutil
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from chess_analyzer.db import (
 from chess_analyzer.stats import AggregatedStats, GamePhase
 
 LICHESS_PUZZLE_URL: str = "https://database.lichess.org/lichess_db_puzzle.csv.zst"
+DOWNLOAD_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -114,27 +116,32 @@ def download_puzzle_dataset(dest_dir: str, url: str = LICHESS_PUZZLE_URL) -> Pat
             f"mínimo necessário: 3.5 GB. Libere espaço e tente novamente."
         )
 
-    with urllib.request.urlopen(url) as response:  # noqa: S310
-        content_length = response.headers.get("Content-Length")
-        total = int(content_length) if content_length else 0
-        downloaded = 0
-        with part.open("wb") as f:
-            while chunk := response.read(65536):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = downloaded / total * 100
-                    print(f"\rBaixando... {pct:.1f}%", end="", flush=True)
-    print()
+    try:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310
+            content_length = response.headers.get("Content-Length")
+            total = int(content_length) if content_length else 0
+            downloaded = 0
+            with part.open("wb") as f:
+                while chunk := response.read(65536):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = downloaded / total * 100
+                        print(f"\rBaixando... {pct:.1f}%", end="", flush=True)
+            print()
 
-    if total and downloaded != total:
+            if total and downloaded != total:
+                raise RuntimeError(
+                    f"Download incompleto: esperado {total} bytes, recebidos {downloaded}. "
+                    f"Tente novamente."
+                )
+
+            part.rename(target)
+    except (TimeoutError, OSError, RuntimeError, urllib.error.URLError) as exc:
         part.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Download incompleto: esperado {total} bytes, recebidos {downloaded}. "
-            f"Arquivo temporário removido. Tente novamente."
-        )
-
-    part.rename(target)
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Falha no download do dataset: {exc}") from exc
     return target
 
 
@@ -179,7 +186,7 @@ def index_puzzles(
         if registered_sha256 == file_sha256:
             return IndexStats(total=0, inserted=0, skipped=True)
 
-    _clear_puzzle_tables(db_path)
+    _prepare_staging_tables(db_path)
 
     conn = get_connection(db_path)
     conn.isolation_level = None
@@ -210,12 +217,11 @@ def index_puzzles(
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO puzzles (
+                INSERT INTO puzzles_staging (
                     puzzle_id, fen, moves, rating, rating_deviation,
                     popularity, nb_plays, themes, game_url, opening_tags, daily_date
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(puzzle_id) DO NOTHING;
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     row["PuzzleId"],
@@ -235,9 +241,8 @@ def index_puzzles(
             if themes:
                 cur.executemany(
                     """
-                    INSERT INTO puzzle_themes (puzzle_id, theme)
-                    VALUES (?, ?)
-                    ON CONFLICT(puzzle_id, theme) DO NOTHING;
+                    INSERT INTO puzzle_themes_staging (puzzle_id, theme)
+                    VALUES (?, ?);
                     """,
                     [(row["PuzzleId"], theme) for theme in themes],
                 )
@@ -258,9 +263,12 @@ def index_puzzles(
     except Exception:
         if in_transaction:
             conn.execute("ROLLBACK;")
+        _drop_staging_tables(db_path)
         raise
     finally:
         conn.close()
+
+    _promote_staging_tables(db_path)
 
     save_puzzle_index_meta(
         db_path=db_path,
@@ -290,7 +298,8 @@ def get_puzzles_by_theme(
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT p.puzzle_id, p.fen, p.moves, p.rating, p.themes, p.opening_tags
+            SELECT p.puzzle_id, p.fen, p.moves, p.rating, p.popularity, p.themes,
+                   p.opening_tags, p.game_url
             FROM puzzles p
             JOIN puzzle_themes pt ON p.puzzle_id = pt.puzzle_id
             WHERE pt.theme = ?
@@ -311,21 +320,87 @@ def get_puzzles_by_theme(
             "fen": r[1],
             "moves": r[2],
             "rating": r[3],
-            "themes": r[4],
-            "opening_tags": r[5],
+            "popularity": r[4],
+            "themes": r[5],
+            "opening_tags": r[6],
+            "game_url": r[7],
         }
         for r in rows
     ]
 
 
-def _clear_puzzle_tables(db_path: str) -> None:
-    """Remove todos os dados de puzzles para re-indexação limpa."""
+def _prepare_staging_tables(db_path: str) -> None:
+    """Cria tabelas temporárias para indexação segura sem apagar o dataset atual."""
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.executescript("""
+            DROP TABLE IF EXISTS puzzle_themes_staging;
+            DROP TABLE IF EXISTS puzzles_staging;
+
+            CREATE TABLE puzzles_staging (
+                puzzle_id        TEXT PRIMARY KEY,
+                fen              TEXT NOT NULL,
+                moves            TEXT NOT NULL,
+                rating           INTEGER NOT NULL,
+                rating_deviation INTEGER NOT NULL,
+                popularity       INTEGER NOT NULL,
+                nb_plays         INTEGER NOT NULL,
+                themes           TEXT NOT NULL,
+                game_url         TEXT,
+                opening_tags     TEXT,
+                daily_date       INTEGER
+            );
+
+            CREATE TABLE puzzle_themes_staging (
+                puzzle_id TEXT NOT NULL,
+                theme     TEXT NOT NULL,
+                PRIMARY KEY (puzzle_id, theme)
+            );
+            """)
+    finally:
+        conn.close()
+
+
+def _promote_staging_tables(db_path: str) -> None:
+    """Substitui as tabelas principais apenas após indexação bem-sucedida."""
     conn = get_connection(db_path)
     try:
         with conn:
             conn.execute("DELETE FROM puzzle_themes;")
             conn.execute("DELETE FROM puzzles;")
             conn.execute("DELETE FROM puzzle_index_meta;")
+            conn.execute(
+                """
+                INSERT INTO puzzles (
+                    puzzle_id, fen, moves, rating, rating_deviation, popularity,
+                    nb_plays, themes, game_url, opening_tags, daily_date
+                )
+                SELECT
+                    puzzle_id, fen, moves, rating, rating_deviation, popularity,
+                    nb_plays, themes, game_url, opening_tags, daily_date
+                FROM puzzles_staging;
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO puzzle_themes (puzzle_id, theme)
+                SELECT puzzle_id, theme FROM puzzle_themes_staging;
+                """
+            )
+            conn.execute("DROP TABLE IF EXISTS puzzle_themes_staging;")
+            conn.execute("DROP TABLE IF EXISTS puzzles_staging;")
+    finally:
+        conn.close()
+
+
+def _drop_staging_tables(db_path: str) -> None:
+    """Remove tabelas temporárias após falha na indexação."""
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("DROP TABLE IF EXISTS puzzle_themes_staging;")
+            conn.execute("DROP TABLE IF EXISTS puzzles_staging;")
     finally:
         conn.close()
 
@@ -500,7 +575,7 @@ def generate_training_session(
                 solution_uci=solution_uci,
                 solution_san=solution_san,
                 rating=p["rating"],
-                popularity=p.get("popularity", 0),
+                popularity=p["popularity"],
                 themes=p["themes"].split() if isinstance(p["themes"], str) else p["themes"],
                 game_url=p.get("game_url"),
             )

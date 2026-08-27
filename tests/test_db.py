@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 
 from chess_analyzer.db import (
+    BUSY_TIMEOUT_MS,
     ImportStats,
     calculate_game_hash,
     get_connection,
     get_evaluation,
+    get_game_starting_fen,
     init_db,
     normalize_fen,
     save_evaluation,
@@ -68,7 +70,7 @@ def test_init_db_creates_tables_and_user_version(db_path: str) -> None:
         cur = conn.cursor()
         cur.execute("PRAGMA user_version;")
         user_version = cur.fetchone()[0]
-        assert user_version == 2
+        assert user_version == 3
 
         cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = {row[0] for row in cur.fetchall()}
@@ -390,6 +392,43 @@ def test_evaluations_cache_crud_and_depth_unique(db_path: str) -> None:
         assert rows == [(12, 38), (20, 42)]
     finally:
         conn.close()
+
+
+def test_busy_timeout_pragma_applied(db_path: str) -> None:
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA busy_timeout;")
+        assert cur.fetchone()[0] == BUSY_TIMEOUT_MS
+    finally:
+        conn.close()
+
+
+def test_save_game_persists_starting_fen(db_path: str) -> None:
+    custom_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+    game = create_sample_game()
+    game.starting_fen = custom_fen
+    save_games([game], db_path)
+
+    conn = get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT starting_fen FROM games;")
+        assert cur.fetchone()[0] == normalize_fen(custom_fen)
+        assert get_game_starting_fen(db_path, 1) == normalize_fen(custom_fen)
+    finally:
+        conn.close()
+
+
+def test_evaluation_cache_isolated_by_engine_key(db_path: str) -> None:
+    init_db(db_path)
+    fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    save_evaluation(db_path, fen, depth=12, eval_cp=10, eval_mate=None, engine_key="engine-a")
+    save_evaluation(db_path, fen, depth=12, eval_cp=20, eval_mate=None, engine_key="engine-b")
+
+    assert get_evaluation(db_path, fen, min_depth=12, engine_key="engine-a") == (10, None, 12)
+    assert get_evaluation(db_path, fen, min_depth=12, engine_key="engine-b") == (20, None, 12)
 
 
 def test_special_characters_and_encoding_persistence(db_path: str) -> None:

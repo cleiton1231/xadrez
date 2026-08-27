@@ -200,6 +200,29 @@ def test_migration_v1_to_v2(tmp_path: Path) -> None:
             variant TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE moves (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            ply INTEGER NOT NULL,
+            san TEXT NOT NULL,
+            fen_after TEXT NOT NULL,
+            category TEXT,
+            eval_cp INTEGER,
+            eval_mate INTEGER,
+            delta_win_prob REAL,
+            win_prob_before REAL,
+            win_prob_after REAL,
+            UNIQUE(game_id, ply)
+        );
+        CREATE TABLE evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fen TEXT NOT NULL,
+            depth INTEGER NOT NULL,
+            eval_cp INTEGER,
+            eval_mate INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(fen, depth)
+        );
         INSERT INTO games (game_hash, white, black, result)
         VALUES ('abc123', 'Alice', 'Bob', '1-0');
         PRAGMA user_version = 1;
@@ -213,9 +236,9 @@ def test_migration_v1_to_v2(tmp_path: Path) -> None:
     try:
         cur = conn.cursor()
 
-        # user_version deve ser 2
+        # user_version deve ser 3 após migration completa
         cur.execute("PRAGMA user_version;")
-        assert cur.fetchone()[0] == 2, "user_version deve ser 2 após migration"
+        assert cur.fetchone()[0] == 3, "user_version deve ser 3 após migration"
 
         # Dados de games existentes devem estar intactos
         cur.execute("SELECT white, black FROM games WHERE game_hash = 'abc123';")

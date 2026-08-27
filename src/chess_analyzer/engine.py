@@ -1,6 +1,8 @@
 """Wrapper para o Stockfish (UCI) responsável por avaliar as posições do tabuleiro."""
 
+import hashlib
 import logging
+import os
 from typing import Self
 
 import chess
@@ -37,6 +39,13 @@ class StockfishEngine:
         self.depth = depth
         self.move_time_limit = move_time_limit
         self._engine: chess.engine.SimpleEngine | None = None
+
+    @property
+    def cache_key(self) -> str:
+        """Chave estável para o cache SQLite de avaliações deste binário/profundidade."""
+        resolved = os.path.realpath(self.path) if os.path.exists(self.path) else self.path
+        raw = f"{resolved}:{self.depth}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     def __enter__(self) -> Self:
         """Inicia o processo do Stockfish de forma segura."""

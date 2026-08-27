@@ -1,0 +1,10 @@
+[Event "Custom FEN Game"]
+[Site "Test"]
+[Date "2024.01.01"]
+[White "FenPlayerW"]
+[Black "FenPlayerB"]
+[Result "1-0"]
+[SetUp "1"]
+[FEN "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"]
+
+1... e5 2. Nf3 1-0

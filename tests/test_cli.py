@@ -9,8 +9,7 @@ from typer.testing import CliRunner
 
 from chess_analyzer.cli import app
 from chess_analyzer.db import get_connection
-
-STOCKFISH_PATH = ".venv/bin/stockfish"
+from tests.conftest import STOCKFISH_PATH, requires_stockfish
 
 
 def get_fixture_path(filename: str) -> str:
@@ -68,6 +67,7 @@ def test_cli_import_corrupted_file_exit_code_1(runner: CliRunner, temp_db: str) 
 
 
 # 4. test_cli_analyze_flow
+@requires_stockfish
 def test_cli_analyze_flow(runner: CliRunner, temp_db: str) -> None:
     """Analyze com Stockfish real deve classificar lances pendentes com exit code 0."""
     pgn_path = get_fixture_path("lichess_real.pgn")
@@ -101,6 +101,7 @@ def test_cli_analyze_missing_engine_exit_code_1(runner: CliRunner, temp_db: str)
 
 
 # 6. test_cli_stats_table_output
+@requires_stockfish
 def test_cli_stats_table_output(runner: CliRunner, temp_db: str) -> None:
     """Stats no modo padrão deve renderizar tabelas ricas com dados analisados."""
     pgn_path = get_fixture_path("lichess_real.pgn")
@@ -118,6 +119,7 @@ def test_cli_stats_table_output(runner: CliRunner, temp_db: str) -> None:
 
 
 # 7. test_cli_stats_json_output
+@requires_stockfish
 def test_cli_stats_json_output(runner: CliRunner, temp_db: str) -> None:
     """Stats com --json deve retornar JSON estruturado com as 3 dimensões (all)."""
     pgn_path = get_fixture_path("lichess_real.pgn")
@@ -139,6 +141,7 @@ def test_cli_stats_json_output(runner: CliRunner, temp_db: str) -> None:
 
 
 # 8. test_cli_stats_json_filtered_by
+@requires_stockfish
 def test_cli_stats_json_filtered_by(runner: CliRunner, temp_db: str) -> None:
     """Stats com --json e --by color deve retornar JSON contendo apenas a chave 'color'."""
     pgn_path = get_fixture_path("lichess_real.pgn")
@@ -183,6 +186,7 @@ def test_cli_stats_warning_in_stderr_for_json(runner: CliRunner, temp_db: str) -
 
 
 # 11. test_cli_stats_nonexistent_player
+@requires_stockfish
 def test_cli_stats_nonexistent_player(runner: CliRunner, temp_db: str) -> None:
     """Consulta para jogador inexistente deve retornar exit code 0 e mensagem amigável."""
     pgn_path = get_fixture_path("lichess_real.pgn")
@@ -198,6 +202,7 @@ def test_cli_stats_nonexistent_player(runner: CliRunner, temp_db: str) -> None:
 
 
 # 12. test_cli_end_to_end_dod_fase1
+@requires_stockfish
 def test_cli_end_to_end_dod_fase1(runner: CliRunner, temp_db: str) -> None:
     """Pipeline completo de ponta a ponta da Fase 1 (import -> analyze -> stats)."""
     pgn_path = get_fixture_path("lichess_real.pgn")

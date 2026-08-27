@@ -28,6 +28,8 @@ htmlcov/
 .idea/
 
 
-# Teamwork agent artifacts
+*.egg-info/
+src/chess_analyzer.egg-info/
+
 .agents/
 ORIGINAL_REQUEST.md

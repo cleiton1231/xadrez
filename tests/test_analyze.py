@@ -11,8 +11,19 @@ from chess_analyzer.classify import PositionEvaluation
 from chess_analyzer.db import get_connection, get_evaluation, init_db, save_games
 from chess_analyzer.engine import StockfishEngine
 from chess_analyzer.pgn_import import ParsedGame, ParsedMove, parse_pgn_file
+from tests.conftest import STOCKFISH_PATH, requires_stockfish
 
-STOCKFISH_PATH = ".venv/bin/stockfish"
+_EVAL_INSERT = (
+    "INSERT INTO evaluations (fen, depth, engine_key, eval_cp, eval_mate) "
+    "VALUES (?, ?, ?, ?, ?)"
+)
+
+
+def _mock_engine() -> MagicMock:
+    mock = MagicMock(spec=StockfishEngine)
+    mock.depth = 12
+    mock.cache_key = "mock-engine"
+    return mock
 
 
 def get_fixture_path(filename: str) -> str:
@@ -57,8 +68,7 @@ def test_analyze_cache_miss_invokes_engine_and_saves_evaluation(
     """Cache miss deve chamar o engine para posições e persistir em evaluations."""
     save_games([sample_game], temp_db)
 
-    mock_engine = MagicMock(spec=StockfishEngine)
-    mock_engine.depth = 12
+    mock_engine = _mock_engine()
     # Retornos para: FEN inicial, FEN move 1, FEN move 2
     mock_engine.evaluate.side_effect = [
         PositionEvaluation(white_cp=20, mate_for_white=None),   # Inicial
@@ -79,6 +89,7 @@ def test_analyze_cache_miss_invokes_engine_and_saves_evaluation(
         temp_db,
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
         min_depth=12,
+        engine_key="mock-engine",
     )
     assert eval_init == (20, None, 12)
 
@@ -86,6 +97,7 @@ def test_analyze_cache_miss_invokes_engine_and_saves_evaluation(
         temp_db,
         "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
         min_depth=12,
+        engine_key="mock-engine",
     )
     assert eval_m1 == (35, None, 12)
 
@@ -98,21 +110,26 @@ def test_analyze_cache_hit_bypasses_engine(temp_db: str, sample_game: ParsedGame
     conn = get_connection(temp_db)
     with conn:
         conn.execute(
-            "INSERT INTO evaluations (fen, depth, eval_cp, eval_mate) VALUES (?, ?, ?, ?)",
-            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -", 12, 15, None),
+            _EVAL_INSERT,
+            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -", 12, "mock-engine", 15, None),
         )
         conn.execute(
-            "INSERT INTO evaluations (fen, depth, eval_cp, eval_mate) VALUES (?, ?, ?, ?)",
-            ("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -", 12, 40, None),
+            _EVAL_INSERT,
+            ("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -", 12, "mock-engine", 40, None),
         )
         conn.execute(
-            "INSERT INTO evaluations (fen, depth, eval_cp, eval_mate) VALUES (?, ?, ?, ?)",
-            ("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq -", 12, 35, None),
+            _EVAL_INSERT,
+            (
+                "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq -",
+                12,
+                "mock-engine",
+                35,
+                None,
+            ),
         )
     conn.close()
 
-    mock_engine = MagicMock(spec=StockfishEngine)
-    mock_engine.depth = 12
+    mock_engine = _mock_engine()
 
     stats = analyze_games(temp_db, mock_engine, target_depth=12)
 
@@ -130,8 +147,7 @@ def test_analyze_perspective_and_classification_values(
     """
     save_games([sample_game], temp_db)
 
-    mock_engine = MagicMock(spec=StockfishEngine)
-    mock_engine.depth = 12
+    mock_engine = _mock_engine()
     # Posição inicial: +20cp para Brancas (WinProb(20) ~ 51.84%)
     # Após 1. e4 (Brancas): +150cp -> WinProb(150) ~ 63.46% -> ΔW = 51.84 - 63.46 = -11.62 -> BEST
     # Após 1... e5 (Pretas): -200cp para Brancas (+200cp para Pretas)
@@ -189,8 +205,7 @@ def test_analyze_failure_resilience_preserves_evals_without_partial_moves(
     """Falha durante a avaliação não corrompe tabela moves (tudo NULL) mas preserva evaluations."""
     save_games([sample_game], temp_db)
 
-    mock_engine = MagicMock(spec=StockfishEngine)
-    mock_engine.depth = 12
+    mock_engine = _mock_engine()
     # Avalia posição inicial com sucesso, avalia move 1 com sucesso, falha no move 2
     mock_engine.evaluate.side_effect = [
         PositionEvaluation(white_cp=20, mate_for_white=None),
@@ -230,8 +245,7 @@ def test_analyze_idempotency_skips_fully_analyzed_games(
     """Executar a análise duas vezes consecutivas não reprocessa nem invoca o engine na 2ª vez."""
     save_games([sample_game], temp_db)
 
-    mock_engine = MagicMock(spec=StockfishEngine)
-    mock_engine.depth = 12
+    mock_engine = _mock_engine()
     mock_engine.evaluate.side_effect = [
         PositionEvaluation(white_cp=20, mate_for_white=None),
         PositionEvaluation(white_cp=35, mate_for_white=None),
@@ -252,8 +266,10 @@ def test_analyze_idempotency_skips_fully_analyzed_games(
     assert mock_engine.evaluate.call_count == 3  # Nenhuma chamada adicional
 
 
+@requires_stockfish
 def test_analyze_real_stockfish_end_to_end(temp_db: str) -> None:
     """Teste de ponta a ponta sem mock, rodando o Stockfish real com fixture PGN."""
+    assert STOCKFISH_PATH is not None
     games = list(parse_pgn_file(get_fixture_path("lichess_real.pgn")))
     assert len(games) == 1
     save_games(games, temp_db)

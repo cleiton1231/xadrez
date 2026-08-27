@@ -10,9 +10,11 @@ README de usuário — é a constituição do agente para este projeto.
 
 Ferramenta local que analisa o histórico de partidas de xadrez (PGN) do
 usuário com Stockfish, classifica erros por lance, agrega padrões ao longo
-do tempo (fase do jogo, cor, estrutura de peão, abertura) e gera treino
+do tempo (fase do jogo, cor, abertura) e gera treino
 personalizado a partir do dataset público de puzzles do Lichess, priorizando
 os temas onde o usuário mais erra.
+
+> **Nota:** Análise por estrutura de peões está no escopo original mas ainda não implementada.
 
 Não é um GUI de tabuleiro genérico. O valor está na camada de análise
 agregada, não na visualização de uma partida isolada.
@@ -82,6 +84,9 @@ chess-analyzer/
 │   ├── test_db.py
 │   ├── test_analyze.py
 │   ├── test_stats.py
+│   ├── test_puzzles.py
+│   ├── test_training.py
+│   ├── test_improvements.py
 │   └── fixtures/            # PGNs de teste, posições conhecidas
 ├── data/                     # gitignored — partidas reais do usuário, .db local
 └── docs/
